@@ -1,0 +1,20 @@
+# shedOS Complete Installation
+# Developer-focused OS with all packages included
+---
+- name: "shedOS Complete"
+  description: "Full shedOS installation with everything: Hyprland desktop, complete development environment (Docker, K8s, languages), multimedia tools, office suite, and all productivity apps. Everything a developer needs."
+  critical: true
+  hidden: false
+  selected: true
+  expanded: true
+  immutable: true
+  packages:
+    # This list is installed from the live ISO (all packages already downloaded)
+    # Base system is always installed
+    # Desktop environment: Hyprland + Waybar + all tools
+    # Development: All languages, tools, containers, databases
+    # Multimedia: OBS, GIMP, Inkscape, VLC, Kdenlive
+    # Office: LibreOffice, Thunderbird
+    # Communication: Discord, Slack, Telegram
+    # Virtualization: virt-manager, QEMU, libvirt
+    # All packages from archiso/packages.x86_64 are included

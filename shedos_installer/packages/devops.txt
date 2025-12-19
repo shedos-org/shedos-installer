@@ -1,0 +1,19 @@
+# DevOps packages
+
+# Containers
+docker
+docker-compose
+podman
+buildah
+
+# Kubernetes
+kubectl
+helm
+k9s
+
+# Infrastructure
+terraform
+ansible
+
+# Cloud CLIs (some may need AUR)
+aws-cli-v2

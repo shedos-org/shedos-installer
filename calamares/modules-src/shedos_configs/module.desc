@@ -1,0 +1,7 @@
+# ShedOS Configuration Deployment Module
+# Deploys pre-configured dotfiles to user home
+
+type: job
+name: shedos_configs
+interface: python
+script: main.py

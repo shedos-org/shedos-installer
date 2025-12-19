@@ -1,0 +1,47 @@
+# ShedOS Base System Packages
+# Essential packages for a minimal working system
+
+# Core
+base
+base-devel
+linux
+linux-headers
+linux-firmware
+
+# Boot
+limine
+efibootmgr
+
+# Filesystem
+btrfs-progs
+dosfstools
+e2fsprogs
+
+# Network
+networkmanager
+iwd
+openssh
+
+# Utilities
+sudo
+zsh
+neovim
+git
+curl
+wget
+htop
+man-db
+man-pages
+less
+which
+tree
+
+# Compression
+unzip
+zip
+gzip
+tar
+
+# System
+mkinitcpio
+cryptsetup

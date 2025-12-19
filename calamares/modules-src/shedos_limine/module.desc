@@ -1,0 +1,8 @@
+# ShedOS Limine Bootloader Module
+# Installs Limine bootloader instead of GRUB
+
+type: job
+name: shedos_limine
+interface: python
+script: main.py
+weight: 20

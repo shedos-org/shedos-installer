@@ -1,0 +1,5 @@
+---
+type: "job"
+name: "shedos_plymouth"
+interface: "python"
+script: "main.py"

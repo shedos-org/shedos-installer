@@ -1,0 +1,7 @@
+# ShedOS BTRFS Subvolume Module
+# Creates the 13 BTRFS subvolumes with selective CoW
+
+type: job
+name: shedos_btrfs
+interface: python
+script: main.py

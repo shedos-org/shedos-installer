@@ -1,0 +1,33 @@
+# Desktop environment packages
+# Hyprland and Wayland
+hyprland
+xdg-desktop-portal-hyprland
+waybar
+wofi
+mako
+swaylock
+swayidle
+grim
+slurp
+wl-clipboard
+cliphist
+
+# Terminal
+kitty
+foot
+
+# File manager
+nautilus
+thunar
+
+# Utilities
+brightnessctl
+playerctl
+polkit-gnome
+network-manager-applet
+
+# Themes
+qt5-wayland
+qt6-wayland
+gtk3
+gtk4

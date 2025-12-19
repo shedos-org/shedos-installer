@@ -1,0 +1,7 @@
+# ShedOS NVIDIA Driver Module
+# Handles NVIDIA GPU detection and driver installation
+
+type: job
+name: shedos_nvidia
+interface: python
+script: main.py

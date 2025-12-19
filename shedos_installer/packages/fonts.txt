@@ -1,0 +1,13 @@
+# Font packages
+ttf-dejavu
+ttf-liberation
+noto-fonts
+noto-fonts-emoji
+noto-fonts-cjk
+terminus-font
+
+# Programming fonts with ligatures
+ttf-jetbrains-mono-nerd
+ttf-firacode-nerd
+ttf-cascadia-code-nerd
+ttf-victor-mono-nerd

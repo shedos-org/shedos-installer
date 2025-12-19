@@ -1,0 +1,7 @@
+# ShedOS Finalization Module
+# Enables services, configures git, performs cleanup
+
+type: job
+name: shedos_finalize
+interface: python
+script: main.py

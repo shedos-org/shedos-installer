@@ -1,0 +1,40 @@
+# shedOS Branding Configuration for Calamares
+# https://github.com/calamares/calamares/wiki/Deploy-Configuration#branding
+
+componentName: shedos
+
+strings:
+    productName: "shedOS"
+    shortProductName: "shedOS"
+    version: "0.1.0"
+    shortVersion: "0.1.0"
+    versionedName: "shedOS 0.1.0"
+    shortVersionedName: "shedOS 0.1.0"
+    bootloaderEntryName: "shedOS"
+    productUrl: "https://github.com/theshedman/shedos"
+    supportUrl: "https://github.com/theshedman/shedos/issues"
+    knownIssuesUrl: "https://github.com/theshedman/shedos/issues"
+    releaseNotesUrl: "https://github.com/theshedman/shedos/releases"
+    donateUrl: ""
+
+images:
+    productLogo: "logo.png"
+    productIcon: "icon.png"
+    productWelcome: "welcome.png"
+
+slideshow: "show.qml"
+
+# Catppuccin Mocha color scheme - Navigation/sidebar styling
+style:
+    SidebarBackground: "#1e1e2e"
+    SidebarText: "#cdd6f4"
+    SidebarTextCurrent: "#89b4fa"
+    SidebarBackgroundCurrent: "#313244"
+    SidebarTextHighlight: "#f38ba8"
+    SidebarTextSelect: "#89b4fa"
+
+# Use widget navigation (shows step list on sidebar)
+navigation: widget
+
+uploadServer:
+    type: "none"
