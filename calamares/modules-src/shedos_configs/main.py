@@ -126,19 +126,23 @@ def run():
                 # Copy entire directory
                 if dest_path.exists() and dest_path.is_dir():
                     # Merge with existing directory
+                    libcalamares.utils.debug(f"Merging directory: {src_path} -> {dest_path}")
                     shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
                 else:
+                    libcalamares.utils.debug(f"Copying directory: {src_path} -> {dest_path}")
                     shutil.copytree(src_path, dest_path)
-                libcalamares.utils.debug(f"Deployed directory: {src_name} -> {dest_rel or '~'}")
             else:
                 # Copy single file
+                libcalamares.utils.debug(f"Copying file: {src_path} -> {dest_path}")
                 shutil.copy2(src_path, dest_path)
-                libcalamares.utils.debug(f"Deployed file: {src_name}")
 
             deployed_count += 1
+            libcalamares.utils.debug(f"Successfully deployed: {src_name}")
 
         except Exception as e:
             libcalamares.utils.warning(f"Failed to deploy {src_name}: {e}")
+            # Continue to next config instead of crashing
+            continue
 
     # Deploy wallpaper for desktop profiles
     if has_desktop:

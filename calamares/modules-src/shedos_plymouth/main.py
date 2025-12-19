@@ -47,9 +47,10 @@ def run():
             libcalamares.utils.warning("Skipping Plymouth configuration")
             return None
 
-        # Set Plymouth theme to shedos (without -R flag first)
+        # Set Plymouth theme to shedos AND regenerate initrd (-R flag)
+        # This is the correct way to install a theme persistently
         result = run_chroot(
-            ["plymouth-set-default-theme", "shedos"],
+            ["plymouth-set-default-theme", "-R", "shedos"],
             mount_point=root_mount_point
         )
 
