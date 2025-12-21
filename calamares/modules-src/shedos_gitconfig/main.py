@@ -6,9 +6,8 @@
 #
 
 import os
-import subprocess
 import libcalamares
-from libcalamares.utils import target_env_call, check_target_env_call
+from libcalamares.utils import check_target_env_call
 
 def pretty_name():
     return "Configuring git for developer workflow"
@@ -30,9 +29,6 @@ def run():
     if not fullname:
         fullname = username
 
-    # Email will be set by user after installation via welcome script
-    email = None
-
     libcalamares.utils.debug(f"Configuring git for: {fullname}")
 
     root_mount = gs.value("rootMountPoint")
@@ -44,18 +40,13 @@ def run():
     user_home = os.path.join(root_mount, "home", username)
     gitconfig_path = os.path.join(user_home, ".gitconfig")
 
-    libcalamares.utils.debug(f"Configuring git for user: {username}")
-    libcalamares.utils.debug(f"Full name: {fullname}")
-    libcalamares.utils.debug(f"Email: {email}")
-
-    # Create .gitconfig content
-    # Email will be added on first login
+    # Email will be configured by user on first login
     gitconfig_content = f"""# ShedOS Git Configuration
 # Generated during installation
+# Set your email: git config --global user.email "your@email.com"
 
 [user]
     name = {fullname}
-    # Set your email: git config --global user.email "your@email.com"
 
 [init]
     defaultBranch = main
@@ -84,15 +75,13 @@ def run():
     unstage = reset HEAD --
 """
 
-
     try:
+        # Ensure home directory exists
+        os.makedirs(user_home, exist_ok=True)
+        
         # Write the gitconfig file
         with open(gitconfig_path, 'w') as f:
             f.write(gitconfig_content)
-
-        # Set correct ownership (will be fixed by users module, but let's be safe)
-        # We need to get the UID/GID that will be assigned to the user
-        # For now, we'll set it to be owned by the user using chown in chroot
 
         libcalamares.utils.debug(f"Git config written to {gitconfig_path}")
 
@@ -103,7 +92,6 @@ def run():
 
     except Exception as e:
         libcalamares.utils.warning(f"Failed to configure git: {str(e)}")
-        # Non-fatal error, continue with installation
         return None
 
     return None

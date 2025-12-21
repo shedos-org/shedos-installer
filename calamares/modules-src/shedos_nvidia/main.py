@@ -5,7 +5,7 @@
 ShedOS NVIDIA Driver Module for Calamares
 
 Handles NVIDIA GPU detection and proprietary driver installation.
-Installs nvidia-dkms and related packages, and enables NVIDIA
+Installs nvidia-open-dkms and related packages, and enables NVIDIA
 systemd services for proper suspend/hibernate support.
 """
 
@@ -60,7 +60,7 @@ def run():
     else:
         # Fallback to essential NVIDIA packages
         nvidia_packages = [
-            "nvidia-dkms",
+            "nvidia-open-dkms",
             "nvidia-utils",
             "nvidia-settings",
             "egl-wayland",

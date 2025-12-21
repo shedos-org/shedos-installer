@@ -1,5 +1,0 @@
----
-type: "viewmodule"
-name: "shedos_devinfo"
-interface: "qml"
-script: "shedos_devinfo.qml"

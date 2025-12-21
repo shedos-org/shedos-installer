@@ -5,35 +5,23 @@
 ShedOS Finalization Module for Calamares
 
 Final installation steps:
+- Configure greetd for tuigreet login
 - Enable systemd services
 - Configure git for the user
-- Perform cleanup tasks
 """
 
-import sys
+import os
 from pathlib import Path
 
 import libcalamares
 
-# Add shedos_installer to Python path
-INSTALLER_ROOT = Path("/opt/shedos-installer")
-sys.path.insert(0, str(INSTALLER_ROOT))
 
-from shedos_installer.utils.command import run_chroot, run_command
-
-
-# Base services enabled for all profiles
-BASE_SERVICES = [
+# Services to enable
+SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
     "greetd.service",
     "fstrim.timer",
-]
-
-# Additional services for developer/full profiles
-DEVELOPER_SERVICES = [
-    "postgresql.service",
-    "redis.service",
 ]
 
 
@@ -43,57 +31,88 @@ def pretty_name():
 
 
 def run():
-    """
-    Main entry point for the module.
+    """Main entry point for the module."""
+    libcalamares.utils.debug("shedos_finalize: Starting finalization")
 
-    Enables services, configures git, and performs final cleanup.
-    """
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")
     if not root_mount_point:
-        root_mount_point = "/tmp/calamares-root"
+        libcalamares.utils.warning("shedos_finalize: No rootMountPoint found")
+        return ("No root mount point found.", "")
 
     root_mount = Path(root_mount_point)
+    libcalamares.utils.debug(f"shedos_finalize: Root mount: {root_mount}")
 
     # Get user information
     username = libcalamares.globalstorage.value("username")
     fullname = libcalamares.globalstorage.value("fullname") or username
 
-    # Detect profile from netinstall package selection
-    packages = libcalamares.globalstorage.value("netinstallPackages") or []
-    has_desktop = "hyprland" in packages or "waybar" in packages
-    has_docker = "docker" in packages
+    libcalamares.utils.debug(f"shedos_finalize: username={username}, fullname={fullname}")
 
-    profile = "full" if (has_desktop and has_docker) else ("desktop" if has_desktop else "base")
+    if not username:
+        libcalamares.utils.warning("shedos_finalize: No username found")
+        return None
 
-    libcalamares.utils.debug(f"Finalizing installation for user: {username}")
-    libcalamares.utils.debug(f"Detected profile: {profile} (packages: {len(packages)} items)")
+    # CRITICAL: Configure greetd for tuigreet with Hyprland
+    # This overrides the live ISO's auto-login config
+    greetd_config = f"""[terminal]
+vt = 1
 
-    # Determine which services to enable
-    services_to_enable = BASE_SERVICES.copy()
+[default_session]
+# TUI greeter with Hyprland as default session
+command = "tuigreet --time --remember --remember-session --cmd Hyprland"
+user = "greeter"
+"""
+    greetd_config_path = root_mount / "etc" / "greetd" / "config.toml"
 
-    if profile in ["developer", "full"]:
-        services_to_enable.extend(DEVELOPER_SERVICES)
+    try:
+        greetd_config_path.parent.mkdir(parents=True, exist_ok=True)
+        greetd_config_path.write_text(greetd_config)
+        libcalamares.utils.debug("shedos_finalize: Wrote greetd config for tuigreet")
+
+        # Create greeter user for greetd (if doesn't exist)
+        os.system(f"arch-chroot {root_mount_point} useradd -M -G video -s /usr/bin/nologin greeter 2>/dev/null")
+        os.system(f"arch-chroot {root_mount_point} passwd -l greeter 2>/dev/null")
+        libcalamares.utils.debug("shedos_finalize: Created greeter user")
+
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_finalize: Could not configure greetd: {e}")
+
+    # CRITICAL: Set zsh as default shell for the user
+    # The Calamares users module's userShell setting may not always work
+    libcalamares.utils.debug(f"shedos_finalize: Setting zsh as default shell for {username}")
+    try:
+        # Change user's shell to zsh
+        result = os.system(f"arch-chroot {root_mount_point} chsh -s /usr/bin/zsh {username}")
+        if result == 0:
+            libcalamares.utils.debug(f"shedos_finalize: Set zsh as shell for {username}")
+        else:
+            libcalamares.utils.warning(f"shedos_finalize: chsh returned {result}")
+        
+        # Also ensure zsh is in /etc/shells
+        shells_file = root_mount / "etc" / "shells"
+        if shells_file.exists():
+            shells_content = shells_file.read_text()
+            if "/usr/bin/zsh" not in shells_content:
+                with open(shells_file, "a") as f:
+                    f.write("/usr/bin/zsh\n")
+                libcalamares.utils.debug("shedos_finalize: Added /usr/bin/zsh to /etc/shells")
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_finalize: Could not set zsh shell: {e}")
 
     # Enable services
     enabled_count = 0
-    for service in services_to_enable:
-        result = run_chroot(
-            ["systemctl", "enable", service],
-            mount_point=root_mount_point
-        )
-
-        if result.success:
-            libcalamares.utils.debug(f"Enabled: {service}")
+    for service in SERVICES:
+        result = os.system(f"arch-chroot {root_mount_point} systemctl enable {service} 2>/dev/null")
+        if result == 0:
+            libcalamares.utils.debug(f"shedos_finalize: Enabled {service}")
             enabled_count += 1
         else:
-            # Some services might not be installed, that's okay
-            libcalamares.utils.debug(f"Could not enable {service} (may not be installed)")
+            libcalamares.utils.debug(f"shedos_finalize: Could not enable {service}")
 
-    libcalamares.utils.debug(f"Enabled {enabled_count} services")
+    libcalamares.utils.debug(f"shedos_finalize: Enabled {enabled_count} services")
 
     # Configure git for user
     if username and fullname:
-        # Git configuration commands to run as the user
         git_configs = [
             f'git config --global user.name "{fullname}"',
             'git config --global init.defaultBranch "main"',
@@ -102,50 +121,12 @@ def run():
         ]
 
         for cmd in git_configs:
-            result = run_command([
-                "arch-chroot", root_mount_point,
-                "su", "-", username, "-c", cmd
-            ])
+            os.system(f"arch-chroot {root_mount_point} su - {username} -c '{cmd}' 2>/dev/null")
 
-            if result.success:
-                libcalamares.utils.debug(f"Git configured: {cmd.split('--global ')[1] if '--global' in cmd else cmd}")
-
-        libcalamares.utils.debug(f"Git configured for {username}")
-
-    # Configure greetd for desktop profiles
-    if has_desktop:
-        greetd_config_path = root_mount / "etc" / "greetd" / "config.toml"
-        greetd_config = """[terminal]
-vt = 1
-
-[default_session]
-# TUI greeter with Hyprland as default
-command = "tuigreet --time --remember --remember-session --cmd Hyprland"
-user = "greeter"
-"""
-        try:
-            greetd_config_path.parent.mkdir(parents=True, exist_ok=True)
-            greetd_config_path.write_text(greetd_config)
-
-            # Create greeter user for greetd
-            run_chroot(
-                ["useradd", "-M", "-G", "video", "-s", "/usr/bin/nologin", "greeter"],
-                mount_point=root_mount_point
-            )
-            # Lock the greeter account
-            run_chroot(
-                ["passwd", "-l", "greeter"],
-                mount_point=root_mount_point
-            )
-
-            libcalamares.utils.debug("Greetd configured for Hyprland with greeter user")
-        except Exception as e:
-            libcalamares.utils.warning(f"Could not configure greetd: {e}")
+        libcalamares.utils.debug("shedos_finalize: Git configured")
 
     # Sync filesystems
-    run_command(["sync"])
+    os.system("sync")
 
-    # Final message
-    libcalamares.utils.debug("ShedOS installation finalized successfully")
-
+    libcalamares.utils.debug("shedos_finalize: Installation finalized successfully")
     return None  # Success

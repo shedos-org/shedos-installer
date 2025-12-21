@@ -5,49 +5,47 @@
 ShedOS Configuration Deployment Module for Calamares
 
 Deploys pre-configured dotfiles to the user's home directory.
-Includes configurations for:
-- Hyprland (Wayland compositor)
-- Waybar (status bar)
-- Walker (application launcher)
-- Kitty (terminal emulator)
-- Mako (notification daemon)
-- Neovim (text editor)
-- Zsh (shell)
 """
 
+import os
 import shutil
-import sys
 from pathlib import Path
 
 import libcalamares
 
-# Add shedos_installer to Python path
-# The installer package is at /opt/shedos-installer/ in the live ISO
-INSTALLER_ROOT = Path("/opt/shedos-installer")
-sys.path.insert(0, str(INSTALLER_ROOT))
 
-from shedos_installer.config import CONFIG_DIR
-from shedos_installer.utils.command import run_chroot
+# Hardcoded paths - don't rely on imports that may fail
+CONFIG_DIR = Path("/opt/shedos-installer/configs")
+BRANDING_DIR = Path("/opt/shedos-installer/branding")
 
-
-# Configuration mappings by profile
-# All profiles get base configs (nvim, zsh)
-# Desktop profiles (desktop/developer/full) get desktop environment configs
-
-BASE_CONFIGS = [
-    ("nvim", ".config/nvim"),
-    ("zsh", ""),  # .zshrc, .zprofile go to home directly
-]
-
-DESKTOP_CONFIGS = [
+# Configuration mappings - all configs to be deployed
+# Format: (source_dirname, destination_relative_to_home)
+ALL_CONFIGS = [
+    # Desktop environment - all go to .config/hypr
     ("hyprland", ".config/hypr"),
+    ("hypridle", ".config/hypr"),
+    ("hyprlock", ".config/hypr"),
+
+    # Other desktop apps
     ("waybar", ".config/waybar"),
     ("walker", ".config/walker"),
     ("kitty", ".config/kitty"),
     ("mako", ".config/mako"),
-    ("hypridle", ".config/hypr"),
-    ("hyprlock", ".config/hypr"),
+    ("rofi", ".config/rofi"),
+
+    # Shell and terminal
+    ("starship", ".config"),
+    ("tmux", ""),
+
+    # Development tools
+    ("nvim", ".config/nvim"),
+    ("git", ".config/git"),
+    ("mise", ".config/mise"),
+    ("vscode", ".config/Code/User"),
 ]
+
+# Files from zsh directory need special handling - they go directly to home
+ZSH_FILES = [".zshrc", ".zprofile", ".p10k.zsh"]
 
 
 def pretty_name():
@@ -58,58 +56,54 @@ def pretty_name():
 def run():
     """
     Main entry point for the module.
-
     Copies pre-configured dotfiles to the new user's home directory.
     """
+    libcalamares.utils.debug("shedos_configs: Starting configuration deployment")
+
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")
     if not root_mount_point:
-        root_mount_point = "/tmp/calamares-root"
+        libcalamares.utils.warning("shedos_configs: No rootMountPoint found")
+        return ("No root mount point found.", "")
 
     root_mount = Path(root_mount_point)
+    libcalamares.utils.debug(f"shedos_configs: Root mount point: {root_mount}")
 
     # Get username from global storage
     username = libcalamares.globalstorage.value("username")
-
     if not username:
-        libcalamares.utils.warning("No username found, skipping config deployment")
-        return None
+        libcalamares.utils.warning("shedos_configs: No username found, skipping")
+        return None  # Not an error, just nothing to do
 
     user_home = root_mount / "home" / username
+    libcalamares.utils.debug(f"shedos_configs: User home: {user_home}")
 
     # Ensure home directory exists
     if not user_home.exists():
-        libcalamares.utils.warning(f"User home directory not found: {user_home}")
-        return None
-
-    libcalamares.utils.debug(f"Deploying configs to {user_home}")
-
-    # Detect profile from netinstall package selection
-    # If hyprland is selected, it's a desktop profile
-    packages = libcalamares.globalstorage.value("netinstallPackages") or []
-    has_desktop = "hyprland" in packages or "waybar" in packages
-
-    profile = "desktop" if has_desktop else "base"
-    libcalamares.utils.debug(f"Detected profile: {profile} (hyprland in packages: {has_desktop})")
-
-    # Determine which configs to deploy based on profile
-    configs_to_deploy = BASE_CONFIGS.copy()
-
-    if has_desktop:
-        configs_to_deploy.extend(DESKTOP_CONFIGS)
-        libcalamares.utils.debug("Including desktop environment configs")
+        libcalamares.utils.warning(f"shedos_configs: User home not found: {user_home}")
+        # Try to create it
+        try:
+            user_home.mkdir(parents=True, exist_ok=True)
+            libcalamares.utils.debug(f"shedos_configs: Created user home: {user_home}")
+        except Exception as e:
+            return (f"Could not create user home: {e}", "")
 
     # Check if CONFIG_DIR exists
     if not CONFIG_DIR.exists():
-        libcalamares.utils.warning(f"Config directory not found: {CONFIG_DIR}")
-        return None
+        libcalamares.utils.warning(f"shedos_configs: Config dir not found: {CONFIG_DIR}")
+        return (f"Config directory not found: {CONFIG_DIR}", "")
+
+    libcalamares.utils.debug(f"shedos_configs: Config dir found: {CONFIG_DIR}")
+    libcalamares.utils.debug(f"shedos_configs: Contents: {list(CONFIG_DIR.iterdir())}")
 
     deployed_count = 0
+    errors = []
 
-    for src_name, dest_rel in configs_to_deploy:
+    # Deploy all config directories
+    for src_name, dest_rel in ALL_CONFIGS:
         src_path = CONFIG_DIR / src_name
 
         if not src_path.exists():
-            libcalamares.utils.debug(f"Config source not found, skipping: {src_name}")
+            libcalamares.utils.debug(f"shedos_configs: Skipping (not found): {src_name}")
             continue
 
         # Determine destination path
@@ -118,80 +112,103 @@ def run():
         else:
             dest_path = user_home
 
-        # Ensure parent directory exists
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        libcalamares.utils.debug(f"shedos_configs: Deploying {src_name} -> {dest_path}")
 
         try:
+            # Ensure parent directory exists
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
             if src_path.is_dir():
-                # Copy entire directory
-                if dest_path.exists() and dest_path.is_dir():
-                    # Merge with existing directory
-                    libcalamares.utils.debug(f"Merging directory: {src_path} -> {dest_path}")
-                    shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
-                else:
-                    libcalamares.utils.debug(f"Copying directory: {src_path} -> {dest_path}")
-                    shutil.copytree(src_path, dest_path)
+                # For directories, ensure dest exists for merging
+                dest_path.mkdir(parents=True, exist_ok=True)
+                # Copy all files from source to dest
+                for item in src_path.iterdir():
+                    item_dest = dest_path / item.name
+                    if item.is_dir():
+                        if item_dest.exists():
+                            shutil.rmtree(item_dest)
+                        shutil.copytree(item, item_dest)
+                    else:
+                        shutil.copy2(item, item_dest)
+                libcalamares.utils.debug(f"shedos_configs: Copied dir contents: {src_name}")
             else:
                 # Copy single file
-                libcalamares.utils.debug(f"Copying file: {src_path} -> {dest_path}")
                 shutil.copy2(src_path, dest_path)
+                libcalamares.utils.debug(f"shedos_configs: Copied file: {src_name}")
 
             deployed_count += 1
-            libcalamares.utils.debug(f"Successfully deployed: {src_name}")
 
         except Exception as e:
-            libcalamares.utils.warning(f"Failed to deploy {src_name}: {e}")
-            # Continue to next config instead of crashing
+            error_msg = f"Failed to deploy {src_name}: {e}"
+            libcalamares.utils.warning(f"shedos_configs: {error_msg}")
+            errors.append(error_msg)
             continue
 
-    # Deploy wallpaper for desktop profiles
-    if has_desktop:
-        wallpaper_src = CONFIG_DIR.parent / "branding" / "wallpapers" / "shedos-default.png"
-        if wallpaper_src.exists():
-            try:
-                wallpaper_dest = user_home / ".config" / "hypr" / "wallpaper.png"
-                wallpaper_dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(wallpaper_src, wallpaper_dest)
-                libcalamares.utils.debug("Wallpaper deployed successfully")
-            except Exception as e:
-                libcalamares.utils.warning(f"Could not deploy wallpaper: {e}")
+    # Deploy zsh files (special handling - files go directly to home)
+    zsh_dir = CONFIG_DIR / "zsh"
+    if zsh_dir.exists():
+        for filename in ZSH_FILES:
+            src_file = zsh_dir / filename
+            if src_file.exists():
+                try:
+                    dest_file = user_home / filename
+                    shutil.copy2(src_file, dest_file)
+                    libcalamares.utils.debug(f"shedos_configs: Copied {filename} to home")
+                    deployed_count += 1
+                except Exception as e:
+                    libcalamares.utils.warning(f"shedos_configs: Failed to copy {filename}: {e}")
+        # Also copy any other files in zsh directory
+        for item in zsh_dir.iterdir():
+            if item.name not in ZSH_FILES:
+                try:
+                    dest_file = user_home / item.name
+                    if item.is_file():
+                        shutil.copy2(item, dest_file)
+                    else:
+                        if dest_file.exists():
+                            shutil.rmtree(dest_file)
+                        shutil.copytree(item, dest_file)
+                    libcalamares.utils.debug(f"shedos_configs: Copied zsh/{item.name}")
+                except Exception as e:
+                    libcalamares.utils.warning(f"shedos_configs: Failed to copy zsh/{item.name}: {e}")
 
-    # Deploy first-login script for git email setup
-    first_login_script = CONFIG_DIR.parent / "system" / "shedos-first-login.sh"
-    if first_login_script.exists():
+    # Deploy wallpaper
+    wallpaper_src = BRANDING_DIR / "wallpapers" / "shedos-default.png"
+    if wallpaper_src.exists():
         try:
-            # Copy script to user's local bin
-            local_bin = user_home / ".local" / "bin"
-            local_bin.mkdir(parents=True, exist_ok=True)
-
-            script_dest = local_bin / "shedos-first-login"
-            shutil.copy2(first_login_script, script_dest)
-            script_dest.chmod(0o755)
-
-            # Add to .zshrc to run on first login
-            zshrc_path = user_home / ".zshrc"
-            zshrc_addition = "\n# ShedOS first-login setup (git email)\n~/.local/bin/shedos-first-login\n"
-
-            if zshrc_path.exists():
-                with open(zshrc_path, 'a') as f:
-                    f.write(zshrc_addition)
-            else:
-                zshrc_path.write_text(zshrc_addition)
-
-            libcalamares.utils.debug("First-login script deployed")
+            hypr_dir = user_home / ".config" / "hypr"
+            hypr_dir.mkdir(parents=True, exist_ok=True)
+            wallpaper_dest = hypr_dir / "wallpaper.png"
+            shutil.copy2(wallpaper_src, wallpaper_dest)
+            libcalamares.utils.debug("shedos_configs: Wallpaper deployed")
         except Exception as e:
-            libcalamares.utils.warning(f"Could not deploy first-login script: {e}")
+            libcalamares.utils.warning(f"shedos_configs: Could not deploy wallpaper: {e}")
+    else:
+        libcalamares.utils.debug(f"shedos_configs: Wallpaper not found: {wallpaper_src}")
 
     # Fix ownership of all deployed files
-    if deployed_count > 0:
-        result = run_chroot(
-            ["chown", "-R", f"{username}:{username}", f"/home/{username}"],
-            mount_point=root_mount_point
-        )
+    libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
+    try:
+        # Use os.system for simplicity in chroot context
+        chroot_cmd = f"arch-chroot {root_mount_point} chown -R {username}:{username} /home/{username}"
+        result = os.system(chroot_cmd)
+        if result != 0:
+            libcalamares.utils.warning(f"shedos_configs: chown command returned {result}")
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_configs: Could not fix ownership: {e}")
 
-        if not result.success:
-            libcalamares.utils.warning(f"Could not fix ownership: {result.stderr}")
+    # Verify deployment
+    hyprland_conf = user_home / ".config" / "hypr" / "hyprland.conf"
+    if hyprland_conf.exists():
+        libcalamares.utils.debug(f"shedos_configs: Verified hyprland.conf exists: {hyprland_conf}")
+    else:
+        libcalamares.utils.warning(f"shedos_configs: WARNING: hyprland.conf NOT found after deployment!")
+        errors.append("hyprland.conf not found after deployment")
 
-    libcalamares.utils.debug(f"Deployed {deployed_count} configurations")
+    libcalamares.utils.debug(f"shedos_configs: Deployed {deployed_count} configurations")
+
+    if errors:
+        # Log errors but don't fail the install
+        libcalamares.utils.warning(f"shedos_configs: Completed with {len(errors)} errors")
 
     return None  # Success
