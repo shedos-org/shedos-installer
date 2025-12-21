@@ -18,9 +18,9 @@ strings:
     donateUrl: ""
 
 images:
-    productLogo: "logo.png"
+    productLogo: "shedos-logo.png"
     productIcon: "icon.png"
-    productWelcome: "welcome.png"
+    productWelcome: "shedos-logo.png"
 
 slideshow: "show.qml"
 

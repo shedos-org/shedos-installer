@@ -238,7 +238,7 @@ timeout: 5
             return False
         logger.info(f"Kernel found at {kernel_path}")
 
-        hooks = ["base", "udev", "autodetect", "modconf", "kms", "keyboard", "keymap", "consolefont", "block"]
+        hooks = ["base", "udev", "autodetect", "modconf", "kms", "keyboard", "keymap", "consolefont", "block", "plymouth"]
 
         if self.luks_uuid:
             hooks.append("encrypt")

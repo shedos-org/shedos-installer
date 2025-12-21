@@ -20,6 +20,7 @@ import libcalamares
 SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
+    "iwd.service",
     "greetd.service",
     "fstrim.timer",
 ]
