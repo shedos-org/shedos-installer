@@ -5,7 +5,7 @@
 ShedOS Finalization Module for Calamares
 
 Final installation steps:
-- Configure greetd for tuigreet login
+- Configure greetd for auto-login (hyprlock handles authentication)
 - Enable systemd services
 - Configure git for the user
 """
@@ -53,27 +53,23 @@ def run():
         libcalamares.utils.warning("shedos_finalize: No username found")
         return None
 
-    # CRITICAL: Configure greetd for tuigreet with Hyprland
-    # This overrides the live ISO's auto-login config
+    # CRITICAL: Configure greetd for auto-login with Hyprland
+    # Hyprlock handles authentication immediately after Hyprland starts
+    # This provides a seamless login experience using Hyprlock's theming
     greetd_config = f"""[terminal]
 vt = 1
 
 [default_session]
-# TUI greeter with Hyprland as default session
-command = "tuigreet --time --remember --remember-session --cmd Hyprland"
-user = "greeter"
+# Auto-login to Hyprland - hyprlock handles authentication
+command = "Hyprland"
+user = "{username}"
 """
     greetd_config_path = root_mount / "etc" / "greetd" / "config.toml"
 
     try:
         greetd_config_path.parent.mkdir(parents=True, exist_ok=True)
         greetd_config_path.write_text(greetd_config)
-        libcalamares.utils.debug("shedos_finalize: Wrote greetd config for tuigreet")
-
-        # Create greeter user for greetd (if doesn't exist)
-        os.system(f"arch-chroot {root_mount_point} useradd -M -G video -s /usr/bin/nologin greeter 2>/dev/null")
-        os.system(f"arch-chroot {root_mount_point} passwd -l greeter 2>/dev/null")
-        libcalamares.utils.debug("shedos_finalize: Created greeter user")
+        libcalamares.utils.debug(f"shedos_finalize: Wrote greetd config for auto-login as {username}")
 
     except Exception as e:
         libcalamares.utils.warning(f"shedos_finalize: Could not configure greetd: {e}")

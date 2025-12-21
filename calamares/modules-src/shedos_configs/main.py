@@ -32,6 +32,7 @@ ALL_CONFIGS = [
     ("kitty", ".config/kitty"),
     ("mako", ".config/mako"),
     ("rofi", ".config/rofi"),
+    ("fastfetch", ".config/fastfetch"),
 
     # Shell and terminal
     ("starship", ".config"),
@@ -201,6 +202,29 @@ def run():
     hyprland_conf = user_home / ".config" / "hypr" / "hyprland.conf"
     if hyprland_conf.exists():
         libcalamares.utils.debug(f"shedos_configs: Verified hyprland.conf exists: {hyprland_conf}")
+        
+        # Add hyprlock to startup for installed systems (login screen experience)
+        # This makes hyprlock launch immediately when Hyprland starts
+        try:
+            content = hyprland_conf.read_text()
+            # Add exec-once = hyprlock at the start of the startup section
+            if "exec-once = hyprlock" not in content:
+                # Insert after the "Startup Applications" comment section
+                marker = "# Startup Applications"
+                if marker in content:
+                    # Find the line after the header separator
+                    lines = content.split("\n")
+                    for i, line in enumerate(lines):
+                        if marker in line and i + 2 < len(lines):
+                            # Insert after the separator line (usually "# ────...")
+                            insert_index = i + 2
+                            lines.insert(insert_index, "exec-once = hyprlock  # Login screen on startup")
+                            content = "\n".join(lines)
+                            break
+                    hyprland_conf.write_text(content)
+                    libcalamares.utils.debug("shedos_configs: Added hyprlock to startup for login screen")
+        except Exception as e:
+            libcalamares.utils.warning(f"shedos_configs: Could not add hyprlock to startup: {e}")
     else:
         libcalamares.utils.warning(f"shedos_configs: WARNING: hyprland.conf NOT found after deployment!")
         errors.append("hyprland.conf not found after deployment")
