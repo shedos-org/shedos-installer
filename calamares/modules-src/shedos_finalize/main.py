@@ -6,6 +6,8 @@ ShedOS Finalization Module for Calamares
 
 Final installation steps:
 - Configure greetd for auto-login (hyprlock handles authentication)
+- Clean up live ISO-specific files (motd, shedos-live.sh, issue)
+- Initialize pacman keyring for the installed system
 - Enable systemd services
 - Configure git for the user
 """
@@ -74,6 +76,34 @@ user = "{username}"
     except Exception as e:
         libcalamares.utils.warning(f"shedos_finalize: Could not configure greetd: {e}")
 
+    # Clean up live ISO-specific files that shouldn't be in the installed system
+    live_iso_files = [
+        root_mount / "etc" / "profile.d" / "shedos-live.sh",
+        root_mount / "etc" / "motd",
+    ]
+
+    for file_path in live_iso_files:
+        try:
+            if file_path.exists():
+                file_path.unlink()
+                libcalamares.utils.debug(f"shedos_finalize: Removed live ISO file {file_path}")
+        except Exception as e:
+            libcalamares.utils.warning(f"shedos_finalize: Could not remove {file_path}: {e}")
+
+    # Replace /etc/issue with a simpler version for the installed system
+    issue_path = root_mount / "etc" / "issue"
+    issue_content = """
+shedOS
+Kernel: \\r on \\m
+TTY: \\l
+
+"""
+    try:
+        issue_path.write_text(issue_content)
+        libcalamares.utils.debug("shedos_finalize: Updated /etc/issue for installed system")
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_finalize: Could not update /etc/issue: {e}")
+
     # CRITICAL: Set zsh as default shell for the user
     # The Calamares users module's userShell setting may not always work
     libcalamares.utils.debug(f"shedos_finalize: Setting zsh as default shell for {username}")
@@ -95,6 +125,45 @@ user = "{username}"
                 libcalamares.utils.debug("shedos_finalize: Added /usr/bin/zsh to /etc/shells")
     except Exception as e:
         libcalamares.utils.warning(f"shedos_finalize: Could not set zsh shell: {e}")
+
+    # CRITICAL: Initialize pacman keyring for the installed system
+    # Without this, users cannot install packages after installation
+    libcalamares.utils.debug("shedos_finalize: Setting up pacman and keyring")
+    
+    # First sync package databases
+    result = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm 2>/dev/null")
+    if result == 0:
+        libcalamares.utils.debug("shedos_finalize: pacman -Sy succeeded")
+    else:
+        libcalamares.utils.warning(f"shedos_finalize: pacman -Sy failed with code {result}")
+    
+    # Initialize keyring
+    keyring_cmds = [
+        "pacman-key --init",
+        "pacman-key --populate archlinux",
+    ]
+    for kcmd in keyring_cmds:
+        result = os.system(f"arch-chroot {root_mount_point} {kcmd} 2>/dev/null")
+        if result == 0:
+            libcalamares.utils.debug(f"shedos_finalize: {kcmd} succeeded")
+        else:
+            libcalamares.utils.warning(f"shedos_finalize: {kcmd} failed with code {result}")
+
+    # Install required font packages
+    libcalamares.utils.debug("shedos_finalize: Installing font packages")
+    font_packages = ["ttf-font-awesome", "ttf-nerd-fonts-symbols"]
+    result = os.system(f"arch-chroot {root_mount_point} pacman -S --noconfirm {' '.join(font_packages)} 2>/dev/null")
+    if result == 0:
+        libcalamares.utils.debug("shedos_finalize: Font packages installed")
+    else:
+        libcalamares.utils.warning(f"shedos_finalize: Font package installation failed with code {result}")
+    
+    # Update font cache
+    result = os.system(f"arch-chroot {root_mount_point} fc-cache -fv 2>/dev/null")
+    if result == 0:
+        libcalamares.utils.debug("shedos_finalize: Font cache updated")
+    else:
+        libcalamares.utils.warning(f"shedos_finalize: Font cache update failed with code {result}")
 
     # Enable services
     enabled_count = 0
