@@ -1,5 +1,0 @@
-# NVIDIA packages
-nvidia-open-dkms
-nvidia-utils
-nvidia-settings
-egl-wayland

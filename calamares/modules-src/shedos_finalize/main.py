@@ -191,6 +191,15 @@ TTY: \\l
 
         libcalamares.utils.debug("shedos_finalize: Git configured")
 
+    # Create standard XDG user directories (Desktop, Documents, Downloads, etc.)
+    if username:
+        libcalamares.utils.debug(f"shedos_finalize: Creating XDG user directories for {username}")
+        result = os.system(f"arch-chroot {root_mount_point} su - {username} -c 'xdg-user-dirs-update' 2>/dev/null")
+        if result == 0:
+            libcalamares.utils.debug("shedos_finalize: XDG user directories created")
+        else:
+            libcalamares.utils.warning(f"shedos_finalize: xdg-user-dirs-update failed with code {result}")
+
     # Sync filesystems
     os.system("sync")
 

@@ -1,4 +1,0 @@
-# System programming tools
-rust
-rustup
-zig

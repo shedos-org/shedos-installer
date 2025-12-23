@@ -1,9 +1,0 @@
-# TUI tools
-tmux
-fzf
-ripgrep
-fd
-bat
-eza
-zoxide
-starship

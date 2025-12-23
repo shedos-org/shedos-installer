@@ -1,8 +1,0 @@
-# Audio packages
-pipewire
-pipewire-alsa
-pipewire-pulse
-pipewire-jack
-wireplumber
-pamixer
-pavucontrol
