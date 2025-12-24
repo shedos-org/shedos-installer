@@ -23,7 +23,8 @@ SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
     "iwd.service",
-    "greetd.service",
+    # "greetd.service",  # Removed: User wants SDDM
+    "sddm.service",      # Added: User wants SDDM enabled explicitly
     "fstrim.timer",
 ]
 
@@ -54,27 +55,6 @@ def run():
     if not username:
         libcalamares.utils.warning("shedos_finalize: No username found")
         return None
-
-    # CRITICAL: Configure greetd for auto-login with Hyprland
-    # Hyprlock handles authentication immediately after Hyprland starts
-    # This provides a seamless login experience using Hyprlock's theming
-    greetd_config = f"""[terminal]
-vt = 1
-
-[default_session]
-# Auto-login to Hyprland - hyprlock handles authentication
-command = "Hyprland"
-user = "{username}"
-"""
-    greetd_config_path = root_mount / "etc" / "greetd" / "config.toml"
-
-    try:
-        greetd_config_path.parent.mkdir(parents=True, exist_ok=True)
-        greetd_config_path.write_text(greetd_config)
-        libcalamares.utils.debug(f"shedos_finalize: Wrote greetd config for auto-login as {username}")
-
-    except Exception as e:
-        libcalamares.utils.warning(f"shedos_finalize: Could not configure greetd: {e}")
 
     # Clean up live ISO-specific files that shouldn't be in the installed system
     live_iso_files = [
@@ -199,6 +179,68 @@ TTY: \\l
             libcalamares.utils.debug("shedos_finalize: XDG user directories created")
         else:
             libcalamares.utils.warning(f"shedos_finalize: xdg-user-dirs-update failed with code {result}")
+
+        # Create user 'projects' and 'work' directories (Request: specific settings in finalize)
+        for user_dir in ["projects", "work"]:
+            dir_path = root_mount / "home" / username / user_dir
+            try:
+                dir_path.mkdir(parents=True, exist_ok=True)
+                # Set ownership (uid:gid)
+                # We need to find the uid/gid of the user in the chroot...
+                # Simpler: run mkdir as the user via su
+                os.system(f"arch-chroot {root_mount_point} su - {username} -c 'mkdir -p ~/{user_dir}'")
+                libcalamares.utils.debug(f"shedos_finalize: Created ~/{user_dir}")
+            except Exception as e:
+                libcalamares.utils.warning(f"shedos_finalize: Could not create ~/{user_dir}: {e}")
+
+    # Force SDDM Theme to Catppuccin
+    # Calamares displaymanager module might have written defaults (breeze). We overwrite/ensure this.
+    sddm_theme_config = """[Theme]
+Current=catppuccin-mocha-mauve
+"""
+    sddm_config_dir = root_mount / "etc" / "sddm.conf.d"
+    sddm_theme_path = sddm_config_dir / "theme.conf"
+    
+    try:
+        sddm_config_dir.mkdir(parents=True, exist_ok=True)
+        sddm_theme_path.write_text(sddm_theme_config)
+        libcalamares.utils.debug("shedos_finalize: Enforced Catppuccin SDDM theme")
+        
+        # CLEANUP: Remove Live ISO Autologin Config
+        live_autologin_path = sddm_config_dir / "live-session-autologin.conf"
+        if live_autologin_path.exists():
+            live_autologin_path.unlink()
+            libcalamares.utils.debug("shedos_finalize: REMOVED live-session-autologin.conf")
+        
+        # CREATE: New User Autologin Config (Manual Fallback)
+        # If displaymanager module failed to create it (or basicSetup=false prevented it), we do it here.
+        new_autologin_path = sddm_config_dir / "autologin.conf"
+        autologin_content = f"""[Autologin]
+User={username}
+Session=hyprland
+Relogin=false
+"""
+        # Always write this to ensure the new user gets autologin
+        new_autologin_path.write_text(autologin_content)
+        libcalamares.utils.debug(f"shedos_finalize: CREATED autologin.conf for user {username}")
+
+        # Remove any 'breeze' setting from other potential SDDM configs Calamares might have touched
+        # E.g. /etc/sddm.conf or other files in .d
+        for conf_file in sddm_config_dir.glob("*.conf"):
+            if conf_file.name == "theme.conf":
+                continue
+            
+            try:
+                content = conf_file.read_text()
+                if "Current=breeze" in content:
+                    new_content = content.replace("Current=breeze", "Current=catppuccin-mocha-mauve")
+                    conf_file.write_text(new_content)
+                    libcalamares.utils.debug(f"shedos_finalize: Replaced breeze in {conf_file.name}")
+            except Exception as e:
+                libcalamares.utils.warning(f"shedos_finalize: Failed checking {conf_file}: {e}")
+
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_finalize: Could not configure SDDM theme/autologin: {e}")
 
     # Sync filesystems
     os.system("sync")
