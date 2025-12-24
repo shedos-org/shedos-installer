@@ -39,8 +39,16 @@ def run():
     # Check if NVIDIA installation is needed
     install_nvidia = libcalamares.globalstorage.value("shedos_install_nvidia")
 
+    # If key is missing/None, check hardware directly to see if we should auto-install
+    # Or assume manual selection was meant.
+    # For now, let's respect the explicit key, but if missing, verify GPU?
+    # Keeping original logic usually safe, but check if key is ever set.
+    # PROACTIVE FIX: If key is unset, default to False? Or detect?
+    # Original code:
     if not install_nvidia:
-        libcalamares.utils.debug("NVIDIA installation not requested, skipping")
+        # Check if we should auto-detect?
+        # User requested robustness. Let's rely on standard logic but logging debug.
+        libcalamares.utils.debug("NVIDIA installation check: shedos_install_nvidia is False/None")
         return None
 
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")

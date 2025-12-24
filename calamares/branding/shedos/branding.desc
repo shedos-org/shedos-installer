@@ -16,6 +16,7 @@ strings:
     knownIssuesUrl: "https://github.com/theshedman/shedos/issues"
     releaseNotesUrl: "https://github.com/theshedman/shedos/releases"
     donateUrl: ""
+    welcome: "Welcome to shedOS installer.<br/>Please connect to a power source if your battery is low.<br/>You may optionally connect to WiFi."
 
 images:
     productLogo: "shedos-logo.png"

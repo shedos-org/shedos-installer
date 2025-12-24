@@ -1,8 +1,0 @@
-# ShedOS Unpack Module
-# Fast rsync-based installation from live filesystem
-
-type: job
-name: shedos_unpack
-interface: python
-script: main.py
-weight: 50

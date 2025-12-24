@@ -1,5 +1,5 @@
 # ShedOS NVIDIA Driver Module
-# Handles NVIDIA GPU detection and driver installation
+# Detects and installs NVIDIA drivers
 
 type: job
 name: shedos_nvidia
