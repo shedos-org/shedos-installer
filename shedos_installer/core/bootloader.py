@@ -158,7 +158,7 @@ class LimineInstaller:
         module_uri = "boot():"
 
         config = f"""# ShedOS Limine Configuration
-timeout: 5
+timeout: 0
 
 /ShedOS Linux
     protocol: linux
