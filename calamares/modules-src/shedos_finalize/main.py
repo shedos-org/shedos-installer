@@ -108,14 +108,9 @@ TTY: \\l
 
     # CRITICAL: Initialize pacman keyring for the installed system
     # Without this, users cannot install packages after installation
-    libcalamares.utils.debug("shedos_finalize: Setting up pacman and keyring")
-    
-    # First sync package databases
-    result = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm 2>/dev/null")
-    if result == 0:
-        libcalamares.utils.debug("shedos_finalize: pacman -Sy succeeded")
-    else:
-        libcalamares.utils.warning(f"shedos_finalize: pacman -Sy failed with code {result}")
+    # CRITICAL: Initialize pacman keyring BEFORE syncing
+    # Without this, database signature verification may fail
+    libcalamares.utils.debug("shedos_finalize: Setting up pacman keyring")
     
     # Initialize keyring
     keyring_cmds = [
@@ -123,11 +118,21 @@ TTY: \\l
         "pacman-key --populate archlinux",
     ]
     for kcmd in keyring_cmds:
-        result = os.system(f"arch-chroot {root_mount_point} {kcmd} 2>/dev/null")
+        # Removed 2>/dev/null to capture errors
+        result = os.system(f"arch-chroot {root_mount_point} {kcmd}")
         if result == 0:
             libcalamares.utils.debug(f"shedos_finalize: {kcmd} succeeded")
         else:
             libcalamares.utils.warning(f"shedos_finalize: {kcmd} failed with code {result}")
+
+    # Now sync package databases
+    libcalamares.utils.debug("shedos_finalize: Syncing package databases")
+    # Removed 2>/dev/null to capture errors
+    result = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm")
+    if result == 0:
+        libcalamares.utils.debug("shedos_finalize: pacman -Sy succeeded")
+    else:
+        libcalamares.utils.warning(f"shedos_finalize: pacman -Sy failed with code {result}")
 
     # Install required font packages
     libcalamares.utils.debug("shedos_finalize: Installing font packages")
