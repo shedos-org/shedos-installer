@@ -240,6 +240,9 @@ def run():
              libcalamares.utils.warning(f"shedos_configs: pacman -Sy returned {res}")
         else:
              libcalamares.utils.debug("shedos_configs: Pacman DB initialized successfully")
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_configs: Failed to init pacman db: {e}")
+
     # Persist NetworkManager Connections (WiFi)
     # Calamares networkcfg module can be flaky, so we manually copy active connections
     libcalamares.utils.debug("shedos_configs: Persisting NetworkManager connections...")
