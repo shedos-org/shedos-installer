@@ -245,8 +245,36 @@ def run():
 
     # Persist NetworkManager Connections (WiFi)
     # Calamares networkcfg module can be flaky, so we manually copy active connections
+    # CRITICAL: In live session, secrets are often in keyring. We must force them to file first.
     libcalamares.utils.debug("shedos_configs: Persisting NetworkManager connections...")
     try:
+        import subprocess
+        
+        # 1. Find active WiFi connection UUIDs
+        try:
+            # -t terse, -f fields
+            cmd = "nmcli -t -f UUID,TYPE,DEVICE connection show --active"
+            output = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
+            
+            for line in output.split('\n'):
+                if not line: continue
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                    uuid = parts[0]
+                    libcalamares.utils.debug(f"shedos_configs: Found active WiFi UUID: {uuid}")
+                    
+                    # 2. Force secrets to be stored in file (0) instead of keyring
+                    # 3. Make connection available to all users (permissions="")
+                    subprocess.run(f"nmcli connection modify {uuid} 802-11-wireless-security.psk-flags 0", shell=True)
+                    subprocess.run(f"nmcli connection modify {uuid} connection.permissions ''", shell=True)
+                    
+                    # 4. Save changes to disk immediately
+                    subprocess.run(f"nmcli connection save {uuid}", shell=True)
+                    libcalamares.utils.debug(f"shedos_configs: Forced persistence for {uuid}")
+        except Exception as nm_e:
+             libcalamares.utils.warning(f"shedos_configs: Failed to prepare NM connections: {nm_e}")
+
+        # 5. Copy the connection files
         source_connections = Path("/etc/NetworkManager/system-connections")
         target_connections = root_mount / "etc/NetworkManager/system-connections"
         
@@ -258,7 +286,7 @@ def run():
                  if conn_file.is_file() and not conn_file.name.endswith(".example"):
                      dest = target_connections / conn_file.name
                      shutil.copy2(conn_file, dest)
-                     # Restrict permissions strictly to root:root 600
+                     # Restrict permissions strictly to root:root 600 (Required by NM)
                      os.chmod(dest, 0o600)
                      count += 1
                      
