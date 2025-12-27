@@ -229,46 +229,44 @@ def run():
         libcalamares.utils.warning(f"shedos_configs: WARNING: hyprland.conf NOT found after deployment!")
         errors.append("hyprland.conf not found after deployment")
 
-    # Install Dev Tools via Mise (Java, Kotlin, Gradle)
-    # run this as the new user within the chroot
-    libcalamares.utils.debug("shedos_configs: Installing mise dev tools...")
-    
-    mise_script = """
-    export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
-    if command -v mise >/dev/null; then
-        echo "Installing development tools..."
-        mise use --global java@openjdk-25 || echo "WARNING: Failed to install java"
-        mise use --global kotlin@2.3.0 || echo "WARNING: Failed to install kotlin"
-        mise use --global gradle@9.2.1 || echo "WARNING: Failed to install gradle"
-        mise reshim
-    else
-        echo "mise not found"
-    fi
-    """
-    
+    # Initialize Pacman DB (fix for missing core/extra db regression)
+    # Running this during install guarantees the DB exists on first boot
+    libcalamares.utils.debug("shedos_configs: Initializing pacman databases...")
     try:
-        # Create a temporary script in the user's home
-        script_path = user_home / "install_mise_tools.sh"
-        script_path.write_text(mise_script)
+        # We are already in the chroot context basically, but we need to execute inside it properly
+        # Using arch-chroot to ensure network and mounts are correct
+        res = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm")
+        if res != 0:
+             libcalamares.utils.warning(f"shedos_configs: pacman -Sy returned {res}")
+        else:
+             libcalamares.utils.debug("shedos_configs: Pacman DB initialized successfully")
+    # Persist NetworkManager Connections (WiFi)
+    # Calamares networkcfg module can be flaky, so we manually copy active connections
+    libcalamares.utils.debug("shedos_configs: Persisting NetworkManager connections...")
+    try:
+        source_connections = Path("/etc/NetworkManager/system-connections")
+        target_connections = root_mount / "etc/NetworkManager/system-connections"
         
-        # Make executable and chown
-        # execution uses arch-chroot so paths must be correct
-        os.system(f"arch-chroot {root_mount_point} chown {username}:{username} /home/{username}/install_mise_tools.sh")
-        os.system(f"arch-chroot {root_mount_point} chmod +x /home/{username}/install_mise_tools.sh")
-        
-        # Execute as user
-        cmd = f"arch-chroot {root_mount_point} su - {username} -c '/home/{username}/install_mise_tools.sh'"
-        result = os.system(cmd)
-        
-        if result != 0:
-             libcalamares.utils.warning(f"shedos_configs: Mise install returned {result}")
+        if source_connections.exists() and source_connections.is_dir():
+             target_connections.mkdir(parents=True, exist_ok=True)
              
-        # Cleanup
-        os.system(f"arch-chroot {root_mount_point} rm -f /home/{username}/install_mise_tools.sh")
-        libcalamares.utils.debug("shedos_configs: Mise tools installation complete")
-        
+             count = 0
+             for conn_file in source_connections.iterdir():
+                 if conn_file.is_file() and not conn_file.name.endswith(".example"):
+                     dest = target_connections / conn_file.name
+                     shutil.copy2(conn_file, dest)
+                     # Restrict permissions strictly to root:root 600
+                     os.chmod(dest, 0o600)
+                     count += 1
+                     
+             if count > 0:
+                 libcalamares.utils.debug(f"shedos_configs: Copied {count} network connection profiles")
+                 # Ensure ownership is root:root
+                 os.system(f"chown -R root:root {target_connections}")
+             else:
+                 libcalamares.utils.debug("shedos_configs: No active network connections found to copy")
     except Exception as e:
-        libcalamares.utils.warning(f"shedos_configs: Failed to install mise tools: {e}")
+        libcalamares.utils.warning(f"shedos_configs: Failed to copy network connections: {e}")
 
     libcalamares.utils.debug(f"shedos_configs: Deployed {deployed_count} configurations")
 
