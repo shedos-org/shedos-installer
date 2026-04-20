@@ -183,72 +183,87 @@ def _bootstrap_pg_user(root_mount_point, username):
         raw_pw = None
     report_lines.append(f"# raw_pw_available={bool(raw_pw)}")
 
+    ident = _pg_quote_ident(username)
+    name_lit = _pg_quote_literal(username)
+
+    sql = (
+        f"DO $$ BEGIN\n"
+        f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {name_lit}) THEN\n"
+        f"    CREATE ROLE {ident} WITH LOGIN CREATEDB;\n"
+        f"  END IF;\n"
+        f"END $$;\n"
+    )
+    if raw_pw:
+        sql += f"ALTER ROLE {ident} WITH PASSWORD {_pg_quote_literal(raw_pw)};\n"
+    sql += (
+        f"SELECT 'CREATE DATABASE {ident} OWNER {ident}'\n"
+        f"  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = {name_lit})\n"
+        f"\\gexec\n"
+    )
+
+    # Run pg_ctl start, psql, pg_ctl stop as a single arch-chroot invocation.
+    # Separate invocations each get their own private /tmp under recent
+    # util-linux, so the ephemeral socket created by pg_ctl at /tmp/.s.PGSQL.*
+    # isn't visible to a later psql call. Keeping everything in one shell
+    # session fixes that.
+    #
+    # The SQL is passed inside a single-quoted heredoc — no shell substitution
+    # happens on its contents, so psql-escaped values from _pg_quote_literal
+    # reach postgres unmolested.
     pg_opts = f"-c listen_addresses='' -c unix_socket_directories={sockdir}"
+    script = f"""set -u
+PGDATA={shlex.quote(pgdata)}
+LOGFILE={shlex.quote(logfile)}
+SOCKDIR={shlex.quote(sockdir)}
+PGOPTS={shlex.quote(pg_opts)}
 
-    start_cmd = _chroot(root_mount_point, [
-        "runuser", "-u", "postgres", "--",
-        "pg_ctl", "-D", pgdata, "-l", logfile, "-w",
-        "-o", pg_opts, "start",
-    ])
+start_rc=0 psql_rc=0 stop_rc=0
+
+echo '=== pg_ctl start ==='
+runuser -u postgres -- pg_ctl -D "$PGDATA" -l "$LOGFILE" -w -o "$PGOPTS" start
+start_rc=$?
+echo "start_rc=$start_rc"
+
+if [ "$start_rc" -eq 0 ]; then
+    cat > /tmp/pg-bootstrap.sql <<'SHEDOS_SQL_EOF'
+{sql}SHEDOS_SQL_EOF
+
+    echo '=== psql bootstrap ==='
+    runuser -u postgres -- psql -h "$SOCKDIR" -U postgres -d postgres \\
+        -v ON_ERROR_STOP=1 -f /tmp/pg-bootstrap.sql
+    psql_rc=$?
+    echo "psql_rc=$psql_rc"
+    rm -f /tmp/pg-bootstrap.sql
+
+    echo '=== pg_ctl stop ==='
+    runuser -u postgres -- pg_ctl -D "$PGDATA" -m fast stop
+    stop_rc=$?
+    echo "stop_rc=$stop_rc"
+fi
+
+exit $(( start_rc | psql_rc | stop_rc ))
+"""
+
+    cmd = _chroot(root_mount_point, ["bash", "-c", script])
     try:
-        r = _run(start_cmd)
-        _record_cmd("pg_ctl start", r)
+        libcalamares.utils.debug(
+            "shedos_finalize: exec: arch-chroot <root> bash -c <bootstrap script>"
+        )
+        r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        _record_cmd("bootstrap (pg_ctl start / psql / pg_ctl stop)", r)
         if r.returncode != 0:
-            _log_cmd_failure("pg_ctl start (bootstrap)", r)
+            _log_cmd_failure(f"pg bootstrap for {username}", r)
             libcalamares.utils.warning(
-                "shedos_finalize: ephemeral postgres did not start; see "
-                "/var/log/shedos-pg-bootstrap.log on the installed system."
+                "shedos_finalize: pg bootstrap did not fully succeed; see "
+                "/var/log/shedos-pg-bootstrap.log on the installed system. "
+                "The shedos-pg-user-bootstrap.service first-boot unit will "
+                "retry on next boot."
             )
-            return
-
-        try:
-            ident = _pg_quote_ident(username)
-            name_lit = _pg_quote_literal(username)
-
-            sql = (
-                f"DO $$ BEGIN\n"
-                f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {name_lit}) THEN\n"
-                f"    CREATE ROLE {ident} WITH LOGIN CREATEDB;\n"
-                f"  END IF;\n"
-                f"END $$;\n"
-            )
-            if raw_pw:
-                sql += f"ALTER ROLE {ident} WITH PASSWORD {_pg_quote_literal(raw_pw)};\n"
-            sql += (
-                f"SELECT 'CREATE DATABASE {ident} OWNER {ident}'\n"
-                f"  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = {name_lit})\n"
-                f"\\gexec\n"
-            )
-
-            psql_cmd = _chroot(root_mount_point, [
-                "runuser", "-u", "postgres", "--",
-                "psql", "-h", sockdir, "-U", "postgres",
-                "-d", "postgres",
-                "-v", "ON_ERROR_STOP=1",
-                "-f", "-",
-            ])
+        else:
+            pw_note = "with password" if raw_pw else "peer-auth only (no password)"
             libcalamares.utils.debug(
-                f"shedos_finalize: exec: {shlex.join(psql_cmd)}  (stdin: bootstrap SQL)"
+                f"shedos_finalize: created PG role + DB for {username} ({pw_note})"
             )
-            r = subprocess.run(psql_cmd, input=sql, capture_output=True,
-                               text=True, check=False)
-            _record_cmd("psql bootstrap", r)
-            if r.returncode != 0:
-                _log_cmd_failure(f"psql bootstrap for {username}", r)
-            else:
-                pw_note = "with password" if raw_pw else "peer-auth only (no password)"
-                libcalamares.utils.debug(
-                    f"shedos_finalize: created PG role + DB for {username} ({pw_note})"
-                )
-        finally:
-            stop_cmd = _chroot(root_mount_point, [
-                "runuser", "-u", "postgres", "--",
-                "pg_ctl", "-D", pgdata, "-m", "fast", "stop",
-            ])
-            r = _run(stop_cmd)
-            _record_cmd("pg_ctl stop", r)
-            if r.returncode != 0:
-                _log_cmd_failure("pg_ctl stop (bootstrap)", r)
     finally:
         _persist_report()
 
