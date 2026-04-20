@@ -151,23 +151,11 @@ def _bootstrap_pg_user(root_mount_point, username):
             report_lines.append(f"  stderr:\n{result.stderr.rstrip()}")
 
     def _persist_report():
-        server_log_host = Path(root_mount_point) / "tmp/pg-bootstrap.log"
-        if server_log_host.exists():
-            try:
-                server_text = server_log_host.read_text(errors="replace")
-                report_lines.append(
-                    "\n--- /tmp/pg-bootstrap.log (ephemeral postgres server log) ---\n"
-                    + server_text.rstrip()
-                )
-            except Exception as e:
-                report_lines.append(
-                    f"\n[warn] could not read /tmp/pg-bootstrap.log: {e}"
-                )
-        else:
-            report_lines.append(
-                "\n[note] /tmp/pg-bootstrap.log does not exist "
-                "(pg_ctl never got far enough to open it)"
-            )
+        # The ephemeral postgres server log (pg_ctl -l $LOGFILE) lives in the
+        # arch-chroot's private mount namespace and evaporates when bash
+        # exits. We dump it to stdout inside the bash script instead (see
+        # `=== server log ===` section below), so _record_cmd already picked
+        # it up as part of the bootstrap result's stdout.
         try:
             persisted_log_host.parent.mkdir(parents=True, exist_ok=True)
             persisted_log_host.write_text("\n".join(report_lines) + "\n")
@@ -239,6 +227,15 @@ if [ "$start_rc" -eq 0 ]; then
     runuser -u postgres -- pg_ctl -D "$PGDATA" -m fast stop
     stop_rc=$?
     echo "stop_rc=$stop_rc"
+fi
+
+echo '=== server log ==='
+# $LOGFILE lives in the ephemeral chroot /tmp and dies with this shell —
+# read it here so the captured stdout preserves it for the persisted report.
+if [ -r "$LOGFILE" ]; then
+    cat "$LOGFILE"
+else
+    echo "(server log $LOGFILE not readable — pg_ctl may not have reached it)"
 fi
 
 exit $(( start_rc | psql_rc | stop_rc ))
