@@ -88,19 +88,26 @@ def run():
         except Exception as e:
             return (f"Could not create user home: {e}", "")
 
-    # Check if CONFIG_DIR exists
-    if not CONFIG_DIR.exists():
-        libcalamares.utils.warning(f"shedos_configs: Config dir not found: {CONFIG_DIR}")
-        return (f"Config directory not found: {CONFIG_DIR}", "")
-
-    libcalamares.utils.debug(f"shedos_configs: Config dir found: {CONFIG_DIR}")
-    libcalamares.utils.debug(f"shedos_configs: Contents: {list(CONFIG_DIR.iterdir())}")
-
+    # CONFIG_DIR is the legacy staging area under /opt/shedos-installer/configs,
+    # populated by the Makefile from archiso/airootfs/etc/skel/. Since the
+    # Phase-1 packaging rework, dotfiles reach the new user's home via
+    # /etc/skel/ (shipped by the shedos-hyprland/shedos-nvim packages) and
+    # useradd -m. The legacy copy is redundant but kept as a safety net if the
+    # dir happens to exist. A missing CONFIG_DIR is NOT an error — we must
+    # still run the manifest-seed step below.
     deployed_count = 0
     errors = []
+    have_legacy_configs = CONFIG_DIR.exists()
+    if have_legacy_configs:
+        libcalamares.utils.debug(f"shedos_configs: Legacy config dir: {CONFIG_DIR}")
+    else:
+        libcalamares.utils.debug(
+            f"shedos_configs: Legacy config dir not found ({CONFIG_DIR}); "
+            "skipping legacy deployment (dotfiles come from /etc/skel)"
+        )
 
     # Deploy all config directories
-    for src_name, dest_rel in ALL_CONFIGS:
+    for src_name, dest_rel in ALL_CONFIGS if have_legacy_configs else []:
         src_path = CONFIG_DIR / src_name
 
         if not src_path.exists():
@@ -229,6 +236,62 @@ def run():
         libcalamares.utils.warning(f"shedos_configs: WARNING: hyprland.conf NOT found after deployment!")
         errors.append("hyprland.conf not found after deployment")
 
+    # Seed shedos-sync-configs last-seen manifest.
+    #
+    # Puts the 3-way merge state machine into a valid initial state: each file
+    # shipped under /usr/share/shedos/<pkg>/defaults/ by a ShedOS package gets
+    # its sha256 recorded at ~/.local/state/shedos/last-seen/<relpath>.sha256
+    # in the new user's home. Without this seed the first
+    # `shedos-sync-configs` run after an upgrade would classify every managed
+    # file as "user-modified" (last_sha unreadable → != dst_sha) and spray
+    # .shedosnew everywhere (Case D in the sync algorithm).
+    libcalamares.utils.debug("shedos_configs: Seeding shedos-sync-configs manifest")
+    try:
+        import hashlib
+
+        shedos_defaults_root = root_mount / "usr/share/shedos"
+        manifest_root = user_home / ".local/state/shedos/last-seen"
+
+        # Exclusions mirrored from /usr/bin/shedos-sync-configs — runtime
+        # state, not config.
+        excludes = (
+            ".config/nvim/lazy-lock.json",
+            ".config/nvim/lazyvim.json",
+        )
+
+        seeded = 0
+        if shedos_defaults_root.is_dir():
+            for pkg_dir in shedos_defaults_root.iterdir():
+                defaults_dir = pkg_dir / "defaults"
+                if not defaults_dir.is_dir():
+                    continue
+                for src_file in defaults_dir.rglob("*"):
+                    if not src_file.is_file():
+                        continue
+                    rel = src_file.relative_to(defaults_dir)
+                    rel_str = str(rel)
+                    if rel_str in excludes:
+                        continue
+                    sha = hashlib.sha256(src_file.read_bytes()).hexdigest()
+                    manifest_path = manifest_root / f"{rel}.sha256"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(sha + "\n")
+                    seeded += 1
+
+        libcalamares.utils.debug(
+            f"shedos_configs: Seeded {seeded} manifest entries"
+        )
+
+        if manifest_root.exists():
+            os.system(
+                f"arch-chroot {root_mount_point} "
+                f"chown -R {username}:{username} /home/{username}/.local"
+            )
+    except Exception as e:
+        libcalamares.utils.warning(
+            f"shedos_configs: Could not seed sync-configs manifest: {e}"
+        )
+
     # Initialize Pacman DB (fix for missing core/extra db regression)
     # Running this during install guarantees the DB exists on first boot
     libcalamares.utils.debug("shedos_configs: Initializing pacman databases...")
@@ -277,27 +340,132 @@ def run():
         # 5. Copy the connection files
         source_connections = Path("/etc/NetworkManager/system-connections")
         target_connections = root_mount / "etc/NetworkManager/system-connections"
-        
-        if source_connections.exists() and source_connections.is_dir():
-             target_connections.mkdir(parents=True, exist_ok=True)
-             
-             count = 0
-             for conn_file in source_connections.iterdir():
-                 if conn_file.is_file() and not conn_file.name.endswith(".example"):
-                     dest = target_connections / conn_file.name
-                     shutil.copy2(conn_file, dest)
-                     # Restrict permissions strictly to root:root 600 (Required by NM)
-                     os.chmod(dest, 0o600)
-                     count += 1
-                     
-             if count > 0:
-                 libcalamares.utils.debug(f"shedos_configs: Copied {count} network connection profiles")
-                 # Ensure ownership is root:root
-                 os.system(f"chown -R root:root {target_connections}")
-             else:
-                 libcalamares.utils.debug("shedos_configs: No active network connections found to copy")
+
+        nm_count = 0
+        if not source_connections.exists() or not source_connections.is_dir():
+            libcalamares.utils.warning(
+                f"shedos_configs: {source_connections} missing on live ISO; "
+                f"no NetworkManager profiles to persist"
+            )
+        else:
+            nm_sources = sorted(p.name for p in source_connections.iterdir())
+            libcalamares.utils.debug(
+                f"shedos_configs: NM source listing: {nm_sources}"
+            )
+            if not nm_sources:
+                libcalamares.utils.warning(
+                    "shedos_configs: /etc/NetworkManager/system-connections is "
+                    "empty — user may have joined wifi via iwd only (that's OK, "
+                    "iwd profiles are copied separately below)"
+                )
+            target_connections.mkdir(parents=True, exist_ok=True)
+            for conn_file in source_connections.iterdir():
+                if conn_file.is_file() and not conn_file.name.endswith(".example"):
+                    dest = target_connections / conn_file.name
+                    shutil.copy2(conn_file, dest)
+                    os.chmod(dest, 0o600)
+                    nm_count += 1
+            if nm_count > 0:
+                libcalamares.utils.debug(
+                    f"shedos_configs: Copied {nm_count} NM connection profiles"
+                )
+                os.system(f"chown -R root:root {target_connections}")
+            nm_landed = sorted(p.name for p in target_connections.iterdir())
+            libcalamares.utils.debug(
+                f"shedos_configs: NM target listing: {nm_landed}"
+            )
+
+        # 6. Also persist iwd profiles. The waybar network icon launches impala
+        # (an iwd TUI), so most users connect via iwd — whose profiles live in
+        # /var/lib/iwd/*.psk, NOT in NetworkManager's dir. Without this copy,
+        # wifi credentials entered during install are lost on reboot.
+        source_iwd = Path("/var/lib/iwd")
+        target_iwd = root_mount / "var/lib/iwd"
+        iwd_count = 0
+        if not source_iwd.exists() or not source_iwd.is_dir():
+            libcalamares.utils.warning(
+                f"shedos_configs: {source_iwd} missing on live ISO; "
+                f"no iwd profiles to persist"
+            )
+        else:
+            try:
+                iwd_sources = sorted(p.name for p in source_iwd.iterdir())
+                libcalamares.utils.debug(
+                    f"shedos_configs: iwd source listing: {iwd_sources}"
+                )
+            except PermissionError as pe:
+                libcalamares.utils.warning(
+                    f"shedos_configs: Cannot read /var/lib/iwd (need root): {pe}"
+                )
+                iwd_sources = []
+            target_iwd.mkdir(parents=True, exist_ok=True)
+            try:
+                for psk_file in source_iwd.iterdir():
+                    if psk_file.is_file() and psk_file.suffix in (".psk", ".open", ".8021x"):
+                        dest = target_iwd / psk_file.name
+                        shutil.copy2(psk_file, dest)
+                        os.chmod(dest, 0o600)
+                        iwd_count += 1
+            except PermissionError as pe:
+                libcalamares.utils.warning(
+                    f"shedos_configs: Cannot read /var/lib/iwd (need root): {pe}"
+                )
+            if iwd_count > 0:
+                libcalamares.utils.debug(
+                    f"shedos_configs: Copied {iwd_count} iwd profiles"
+                )
+                os.chmod(target_iwd, 0o700)
+                os.system(f"chown -R root:root {target_iwd}")
+            if target_iwd.exists():
+                iwd_landed = sorted(p.name for p in target_iwd.iterdir())
+                libcalamares.utils.debug(
+                    f"shedos_configs: iwd target listing: {iwd_landed}"
+                )
+
+        # 7. Bold warning if both sources came up empty — the user will have
+        # to re-enter wifi on first boot. This is the symptom we're trying to
+        # catch loud, not silent.
+        if nm_count == 0 and iwd_count == 0:
+            libcalamares.utils.warning(
+                "shedos_configs: WiFi profiles NOT persisted — user will have "
+                "to re-enter wifi password on first boot. Both "
+                "/etc/NetworkManager/system-connections and /var/lib/iwd were "
+                "empty or unreadable on the live ISO."
+            )
+
+        # 8. Make NetworkManager use iwd as its WiFi backend in the installed
+        # system. Both services are enabled (shedos_finalize SERVICES list) and
+        # without this config they fight over the WiFi device. With iwd as the
+        # backend, NM presents iwd's stored profiles as its own on boot.
+        nm_conf_d = root_mount / "etc/NetworkManager/conf.d"
+        nm_conf_d.mkdir(parents=True, exist_ok=True)
+        (nm_conf_d / "wifi_backend.conf").write_text(
+            "# shedOS: route NetworkManager WiFi through iwd (see /var/lib/iwd/)\n"
+            "[device]\n"
+            "wifi.backend=iwd\n"
+        )
+        libcalamares.utils.debug("shedos_configs: Wrote NM wifi_backend.conf (iwd)")
+
+        # 9. Ship the live-ISO psk-flags=0 NM drop-in to the installed system
+        # too. Without this, any wifi joined for the FIRST time AFTER install
+        # reverts to agent-owned secrets (stored in the user's login keyring
+        # only) and won't auto-connect on a cold boot.
+        nm_defaults_src = Path(
+            "/etc/NetworkManager/conf.d/20-connection-defaults.conf"
+        )
+        nm_defaults_dst = nm_conf_d / "20-connection-defaults.conf"
+        if nm_defaults_src.exists():
+            shutil.copy2(nm_defaults_src, nm_defaults_dst)
+            libcalamares.utils.debug(
+                f"shedos_configs: Copied {nm_defaults_src.name} to target"
+            )
+        else:
+            libcalamares.utils.warning(
+                f"shedos_configs: {nm_defaults_src} missing on live ISO; "
+                f"new wifi connections on the installed system won't persist"
+            )
     except Exception as e:
-        libcalamares.utils.warning(f"shedos_configs: Failed to copy network connections: {e}")
+        libcalamares.utils.warning(f"shedos_configs: Failed to persist wifi profiles: {e}")
 
     libcalamares.utils.debug(f"shedos_configs: Deployed {deployed_count} configurations")
 

@@ -4,38 +4,371 @@
 """
 ShedOS Finalization Module for Calamares
 
-Final installation steps:
-- Configure greetd for auto-login (hyprlock handles authentication)
-- Clean up live ISO-specific files (motd, shedos-live.sh, issue)
-- Initialize pacman keyring for the installed system
-- Enable systemd services
-- Configure git for the user
+Final installation steps, run INSIDE the live ISO with the target root
+mounted at libcalamares.globalstorage["rootMountPoint"]:
+
+  1. Remove live-ISO-only files (motd, shedos-live.sh, issue)
+  2. Rewrite /etc/issue for the installed system
+  3. Set zsh as the user's default shell
+  4. Add the user to `docker` and `libvirt` groups
+  5. Initialize the pacman keyring
+  6. Install fonts, rebuild fontconfig cache
+  7. Initialize the PostgreSQL cluster (`initdb`)
+  8. Enable systemd services (with a manual-symlink fallback)
+  9. Configure git globals for the user
+ 10. Create XDG user directories + ~/projects, ~/work
+ 11. Enforce the Catppuccin SDDM theme and write autologin config
+
+Anything that fails here is logged as a Calamares *warning* (not debug), so
+it shows up in /var/log/calamares/session.log without needing --debug.
 """
 
 import os
+import shlex
+import subprocess
 from pathlib import Path
 
 import libcalamares
 
 
-# Services to enable
+# Services to enable on the installed system.
+#
+# Deliberately NOT enabled:
+#   - auto-cpufreq.service, tlp.service — compete with power-profiles-daemon
+#   - ufw.service                       — firewall off by default
+#   - sshd.service                      — security-sensitive, user opts in
 SERVICES = [
+    # Core
     "NetworkManager.service",
     "bluetooth.service",
     "iwd.service",
-    # "greetd.service",  # Removed: User wants SDDM
-    "sddm.service",      # Added: User wants SDDM enabled explicitly
+    "sddm.service",
     "fstrim.timer",
+
+    # Databases / dev daemons
+    # NOTE: shedos-pg-initdb.service is enabled by shedos-system's .install
+    # hook (post_install) — no need to duplicate that work here.
+    "postgresql.service",             # initdb done below, BEFORE enable
+    "docker.service",                 # containerized dev workflows
+
+    # System services
+    "cronie.service",                 # cron (timeshift dep + user crontabs)
+    "avahi-daemon.service",           # mDNS / .local discovery
+    "thermald.service",               # Intel CPU thermal mgmt (no-op on AMD)
+    "power-profiles-daemon.service",  # desktop-integrated power profiles
+
+    # Socket-activated (zero idle cost, start on first connection)
+    "cups.socket",                    # printing
+    "libvirtd.socket",                # VM mgmt (virt-manager, virsh)
 ]
 
 
+# ─────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────
+
+def _run(cmd, *, capture=True):
+    """
+    Run a command, capture stdout+stderr, and log the result.
+
+    Returns the CompletedProcess. Never raises — caller inspects returncode.
+    """
+    libcalamares.utils.debug(f"shedos_finalize: exec: {shlex.join(cmd)}")
+    result = subprocess.run(
+        cmd,
+        capture_output=capture,
+        text=True,
+        check=False,
+    )
+    return result
+
+
+def _log_cmd_failure(label, result):
+    """Format a failed subprocess result and log it as a Calamares warning."""
+    libcalamares.utils.warning(
+        f"shedos_finalize: {label} FAILED (rc={result.returncode})\n"
+        f"  stdout: {(result.stdout or '').strip()}\n"
+        f"  stderr: {(result.stderr or '').strip()}"
+    )
+
+
+def _chroot(root_mount_point, cmd):
+    """Prepend arch-chroot to a command list."""
+    return ["arch-chroot", root_mount_point, *cmd]
+
+
+# ─────────────────────────────────────────────────────────────
+# PostgreSQL user bootstrap
+# ─────────────────────────────────────────────────────────────
+
+def _pg_quote_ident(name):
+    """Double-quote a SQL identifier, escaping embedded double-quotes."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _pg_quote_literal(value):
+    """
+    Return a Postgres string literal. Uses the E'…' form when the value
+    contains a backslash (required for standard_conforming_strings safety),
+    otherwise plain '…' with single-quote doubling.
+    """
+    escaped = value.replace("'", "''")
+    if "\\" in value:
+        escaped = escaped.replace("\\", "\\\\")
+        return "E'" + escaped + "'"
+    return "'" + escaped + "'"
+
+
+def _bootstrap_pg_user(root_mount_point, username):
+    """
+    Start an ephemeral postgres, create a role + database for `username`,
+    optionally set the user's install password, and stop the server.
+
+    All failures are logged but never raised. An end-to-end diagnostic
+    report is ALWAYS written to /var/log/shedos-pg-bootstrap.log on the
+    installed target, regardless of success or failure — Calamares' own
+    session.log lives on the live ISO and is gone once the user reboots,
+    so this persisted file is the only way a post-install user finds out
+    what happened.
+    """
+    import datetime
+
+    pgdata = "/var/lib/postgres/data"
+    logfile = "/tmp/pg-bootstrap.log"
+    sockdir = "/tmp"
+    persisted_log_host = Path(root_mount_point) / "var/log/shedos-pg-bootstrap.log"
+
+    report_lines = [
+        f"# shedos-finalize PG bootstrap report — {datetime.datetime.now().isoformat()}",
+        f"# username={username!r}",
+    ]
+
+    def _record_cmd(label, result):
+        report_lines.append(f"\n[{label}] rc={result.returncode}")
+        if result.stdout:
+            report_lines.append(f"  stdout:\n{result.stdout.rstrip()}")
+        if result.stderr:
+            report_lines.append(f"  stderr:\n{result.stderr.rstrip()}")
+
+    def _persist_report():
+        server_log_host = Path(root_mount_point) / "tmp/pg-bootstrap.log"
+        if server_log_host.exists():
+            try:
+                server_text = server_log_host.read_text(errors="replace")
+                report_lines.append(
+                    "\n--- /tmp/pg-bootstrap.log (ephemeral postgres server log) ---\n"
+                    + server_text.rstrip()
+                )
+            except Exception as e:
+                report_lines.append(
+                    f"\n[warn] could not read /tmp/pg-bootstrap.log: {e}"
+                )
+        else:
+            report_lines.append(
+                "\n[note] /tmp/pg-bootstrap.log does not exist "
+                "(pg_ctl never got far enough to open it)"
+            )
+        try:
+            persisted_log_host.parent.mkdir(parents=True, exist_ok=True)
+            persisted_log_host.write_text("\n".join(report_lines) + "\n")
+        except Exception as e:
+            libcalamares.utils.warning(
+                f"shedos_finalize: could not persist pg-bootstrap report: {e}"
+            )
+
+    # Password may or may not be exposed by Calamares' users module. If it's
+    # hashed (shadow $id$…$ form), it's useless for postgres — skip.
+    raw_pw = libcalamares.globalstorage.value("password")
+    if not raw_pw or (isinstance(raw_pw, str) and raw_pw.startswith("$")):
+        raw_pw = None
+    report_lines.append(f"# raw_pw_available={bool(raw_pw)}")
+
+    pg_opts = f"-c listen_addresses='' -c unix_socket_directories={sockdir}"
+
+    start_cmd = _chroot(root_mount_point, [
+        "runuser", "-u", "postgres", "--",
+        "pg_ctl", "-D", pgdata, "-l", logfile, "-w",
+        "-o", pg_opts, "start",
+    ])
+    try:
+        r = _run(start_cmd)
+        _record_cmd("pg_ctl start", r)
+        if r.returncode != 0:
+            _log_cmd_failure("pg_ctl start (bootstrap)", r)
+            libcalamares.utils.warning(
+                "shedos_finalize: ephemeral postgres did not start; see "
+                "/var/log/shedos-pg-bootstrap.log on the installed system."
+            )
+            return
+
+        try:
+            ident = _pg_quote_ident(username)
+            name_lit = _pg_quote_literal(username)
+
+            sql = (
+                f"DO $$ BEGIN\n"
+                f"  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = {name_lit}) THEN\n"
+                f"    CREATE ROLE {ident} WITH LOGIN CREATEDB;\n"
+                f"  END IF;\n"
+                f"END $$;\n"
+            )
+            if raw_pw:
+                sql += f"ALTER ROLE {ident} WITH PASSWORD {_pg_quote_literal(raw_pw)};\n"
+            sql += (
+                f"SELECT 'CREATE DATABASE {ident} OWNER {ident}'\n"
+                f"  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = {name_lit})\n"
+                f"\\gexec\n"
+            )
+
+            psql_cmd = _chroot(root_mount_point, [
+                "runuser", "-u", "postgres", "--",
+                "psql", "-h", sockdir, "-U", "postgres",
+                "-d", "postgres",
+                "-v", "ON_ERROR_STOP=1",
+                "-f", "-",
+            ])
+            libcalamares.utils.debug(
+                f"shedos_finalize: exec: {shlex.join(psql_cmd)}  (stdin: bootstrap SQL)"
+            )
+            r = subprocess.run(psql_cmd, input=sql, capture_output=True,
+                               text=True, check=False)
+            _record_cmd("psql bootstrap", r)
+            if r.returncode != 0:
+                _log_cmd_failure(f"psql bootstrap for {username}", r)
+            else:
+                pw_note = "with password" if raw_pw else "peer-auth only (no password)"
+                libcalamares.utils.debug(
+                    f"shedos_finalize: created PG role + DB for {username} ({pw_note})"
+                )
+        finally:
+            stop_cmd = _chroot(root_mount_point, [
+                "runuser", "-u", "postgres", "--",
+                "pg_ctl", "-D", pgdata, "-m", "fast", "stop",
+            ])
+            r = _run(stop_cmd)
+            _record_cmd("pg_ctl stop", r)
+            if r.returncode != 0:
+                _log_cmd_failure("pg_ctl stop (bootstrap)", r)
+    finally:
+        _persist_report()
+
+
+# ─────────────────────────────────────────────────────────────
+# Service enablement
+# ─────────────────────────────────────────────────────────────
+
+def _enable_one_service(root_mount_point, root_mount, service):
+    """
+    Enable a single systemd unit in the target root. Tries three strategies
+    and returns True on the first one that works:
+
+      1. `systemctl --root=<target> enable <unit>`
+         The canonical offline path. Doesn't need a chroot. Preferred.
+
+      2. `arch-chroot <target> systemctl enable <unit>`
+         Traditional fallback. Works if the host's systemctl can't parse
+         something in the target root.
+
+      3. Parse the unit's [Install] section and manually create the
+         WantedBy/RequiredBy symlink. Last resort for truly odd cases
+         (e.g. systemd version mismatch). Independent of systemctl entirely.
+    """
+    # Strategy 1: systemctl --root=
+    r1 = _run(["systemctl", f"--root={root_mount_point}", "enable", service])
+    if r1.returncode == 0:
+        libcalamares.utils.debug(f"shedos_finalize: enabled {service} (--root)")
+        return True
+
+    # Strategy 2: arch-chroot systemctl
+    r2 = _run(_chroot(root_mount_point, ["systemctl", "enable", service]))
+    if r2.returncode == 0:
+        libcalamares.utils.debug(f"shedos_finalize: enabled {service} (chroot)")
+        return True
+
+    # Strategy 3: manual symlink from [Install] section
+    if _manual_enable(root_mount, service):
+        libcalamares.utils.debug(f"shedos_finalize: enabled {service} (manual)")
+        return True
+
+    # All three strategies failed — log loudly.
+    libcalamares.utils.warning(
+        f"shedos_finalize: could not enable {service}\n"
+        f"  --root:    rc={r1.returncode} stderr={(r1.stderr or '').strip()!r}\n"
+        f"  chroot:    rc={r2.returncode} stderr={(r2.stderr or '').strip()!r}\n"
+        f"  manual:    unit has no [Install] section or file missing"
+    )
+    return False
+
+
+def _manual_enable(root_mount, service):
+    """
+    Read the unit file's [Install] section and create the appropriate
+    WantedBy/RequiredBy symlinks manually. Returns True on success.
+    """
+    unit_path = None
+    for candidate in (
+        root_mount / "usr/lib/systemd/system" / service,
+        root_mount / "etc/systemd/system" / service,
+    ):
+        if candidate.exists():
+            unit_path = candidate
+            break
+    if unit_path is None:
+        return False
+
+    try:
+        content = unit_path.read_text()
+    except Exception:
+        return False
+
+    in_install = False
+    wanted_by, required_by = [], []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_install = (stripped == "[Install]")
+            continue
+        if not in_install or "=" not in stripped:
+            continue
+        key, _, val = stripped.partition("=")
+        key, val = key.strip(), val.strip()
+        if key == "WantedBy":
+            wanted_by.extend(val.split())
+        elif key == "RequiredBy":
+            required_by.extend(val.split())
+
+    if not wanted_by and not required_by:
+        return False
+
+    # The symlink target is an ABSOLUTE path inside the target root, so
+    # it'll work on the running installed system even though we're creating
+    # the link from the live ISO's perspective.
+    target_rel = f"/usr/lib/systemd/system/{service}"
+
+    def _mklink(subdir_name, target_name):
+        subdir = root_mount / "etc/systemd/system" / f"{target_name}.{subdir_name}"
+        subdir.mkdir(parents=True, exist_ok=True)
+        link = subdir / service
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(target_rel)
+
+    for t in wanted_by:
+        _mklink("wants", t)
+    for t in required_by:
+        _mklink("requires", t)
+    return True
+
+
+# ─────────────────────────────────────────────────────────────
+# Calamares entry point
+# ─────────────────────────────────────────────────────────────
+
 def pretty_name():
-    """Return the display name for this module."""
     return "Finalizing ShedOS installation"
 
 
 def run():
-    """Main entry point for the module."""
     libcalamares.utils.debug("shedos_finalize: Starting finalization")
 
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")
@@ -46,209 +379,249 @@ def run():
     root_mount = Path(root_mount_point)
     libcalamares.utils.debug(f"shedos_finalize: Root mount: {root_mount}")
 
-    # Get user information
     username = libcalamares.globalstorage.value("username")
     fullname = libcalamares.globalstorage.value("fullname") or username
-
-    libcalamares.utils.debug(f"shedos_finalize: username={username}, fullname={fullname}")
-
+    libcalamares.utils.debug(
+        f"shedos_finalize: username={username}, fullname={fullname}"
+    )
     if not username:
         libcalamares.utils.warning("shedos_finalize: No username found")
         return None
 
-    # Clean up live ISO-specific files that shouldn't be in the installed system
-    live_iso_files = [
+    # ── 1. Remove live-ISO-only files ──────────────────────────────────
+    for file_path in (
         root_mount / "etc" / "profile.d" / "shedos-live.sh",
         root_mount / "etc" / "motd",
-    ]
-
-    for file_path in live_iso_files:
+    ):
         try:
             if file_path.exists():
                 file_path.unlink()
-                libcalamares.utils.debug(f"shedos_finalize: Removed live ISO file {file_path}")
+                libcalamares.utils.debug(f"shedos_finalize: Removed {file_path}")
         except Exception as e:
-            libcalamares.utils.warning(f"shedos_finalize: Could not remove {file_path}: {e}")
+            libcalamares.utils.warning(
+                f"shedos_finalize: Could not remove {file_path}: {e}"
+            )
 
-    # Replace /etc/issue with a simpler version for the installed system
-    issue_path = root_mount / "etc" / "issue"
-    issue_content = """
-shedOS
-Kernel: \\r on \\m
-TTY: \\l
-
-"""
+    # ── 2. Rewrite /etc/issue ──────────────────────────────────────────
+    issue_content = "\nshedOS\nKernel: \\r on \\m\nTTY: \\l\n\n"
     try:
-        issue_path.write_text(issue_content)
-        libcalamares.utils.debug("shedos_finalize: Updated /etc/issue for installed system")
+        (root_mount / "etc" / "issue").write_text(issue_content)
+        libcalamares.utils.debug("shedos_finalize: Updated /etc/issue")
     except Exception as e:
-        libcalamares.utils.warning(f"shedos_finalize: Could not update /etc/issue: {e}")
+        libcalamares.utils.warning(
+            f"shedos_finalize: Could not update /etc/issue: {e}"
+        )
 
-    # CRITICAL: Set zsh as default shell for the user
-    # The Calamares users module's userShell setting may not always work
-    libcalamares.utils.debug(f"shedos_finalize: Setting zsh as default shell for {username}")
+    # ── 3. Default shell = zsh ─────────────────────────────────────────
+    r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/zsh", username]))
+    if r.returncode != 0:
+        _log_cmd_failure(f"chsh -s zsh {username}", r)
+
+    shells_file = root_mount / "etc" / "shells"
     try:
-        # Change user's shell to zsh
-        result = os.system(f"arch-chroot {root_mount_point} chsh -s /usr/bin/zsh {username}")
-        if result == 0:
-            libcalamares.utils.debug(f"shedos_finalize: Set zsh as shell for {username}")
-        else:
-            libcalamares.utils.warning(f"shedos_finalize: chsh returned {result}")
-        
-        # Also ensure zsh is in /etc/shells
-        shells_file = root_mount / "etc" / "shells"
-        if shells_file.exists():
-            shells_content = shells_file.read_text()
-            if "/usr/bin/zsh" not in shells_content:
-                with open(shells_file, "a") as f:
-                    f.write("/usr/bin/zsh\n")
-                libcalamares.utils.debug("shedos_finalize: Added /usr/bin/zsh to /etc/shells")
+        if shells_file.exists() and "/usr/bin/zsh" not in shells_file.read_text():
+            with open(shells_file, "a") as f:
+                f.write("/usr/bin/zsh\n")
     except Exception as e:
-        libcalamares.utils.warning(f"shedos_finalize: Could not set zsh shell: {e}")
+        libcalamares.utils.warning(f"shedos_finalize: /etc/shells update: {e}")
 
-    # CRITICAL: Initialize pacman keyring for the installed system
-    # Without this, users cannot install packages after installation
-    # CRITICAL: Initialize pacman keyring BEFORE syncing
-    # Without this, database signature verification may fail
-    libcalamares.utils.debug("shedos_finalize: Setting up pacman keyring")
-    
-    # Initialize keyring
-    keyring_cmds = [
-        "pacman-key --init",
-        "pacman-key --populate archlinux",
-    ]
-    for kcmd in keyring_cmds:
-        # Removed 2>/dev/null to capture errors
-        result = os.system(f"arch-chroot {root_mount_point} {kcmd}")
-        if result == 0:
-            libcalamares.utils.debug(f"shedos_finalize: {kcmd} succeeded")
-        else:
-            libcalamares.utils.warning(f"shedos_finalize: {kcmd} failed with code {result}")
+    # ── 4. Groups: docker + libvirt ────────────────────────────────────
+    for group in ("docker", "libvirt"):
+        r = _run(_chroot(root_mount_point, ["usermod", "-aG", group, username]))
+        if r.returncode != 0:
+            _log_cmd_failure(f"usermod -aG {group} {username}", r)
 
-    # Now sync package databases
-    libcalamares.utils.debug("shedos_finalize: Syncing package databases")
-    # Removed 2>/dev/null to capture errors
-    result = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm")
-    if result == 0:
-        libcalamares.utils.debug("shedos_finalize: pacman -Sy succeeded")
+    # ── 5. Pacman keyring init ─────────────────────────────────────────
+    for kcmd in (["pacman-key", "--init"],
+                 ["pacman-key", "--populate", "archlinux"]):
+        r = _run(_chroot(root_mount_point, kcmd))
+        if r.returncode != 0:
+            _log_cmd_failure(" ".join(kcmd), r)
+
+    # Sync databases (may fail offline — not fatal)
+    r = _run(_chroot(root_mount_point, ["pacman", "-Sy", "--noconfirm"]))
+    if r.returncode != 0:
+        libcalamares.utils.debug(
+            "shedos_finalize: pacman -Sy didn't succeed (probably offline); "
+            "not fatal"
+        )
+
+    # ── 6. Font packages + cache ───────────────────────────────────────
+    r = _run(_chroot(root_mount_point,
+                     ["pacman", "-S", "--noconfirm", "--needed",
+                      "ttf-font-awesome", "ttf-nerd-fonts-symbols"]))
+    if r.returncode != 0:
+        libcalamares.utils.debug(
+            "shedos_finalize: font pacman -S didn't succeed "
+            "(likely already installed); not fatal"
+        )
+    _run(_chroot(root_mount_point, ["fc-cache", "-f"]))
+
+    # ── 7. PostgreSQL cluster init ─────────────────────────────────────
+    # Use `runuser -u postgres --` instead of `su - postgres -c "..."`:
+    # inside arch-chroot there's no real logind/PAM session, and `su -` can
+    # fail silently when pam_systemd/pam_loginuid can't establish one.
+    # `runuser` bypasses the PAM session stack and is the canonical choice
+    # for chroot/scripted user switches — it's what Arch's own postgresql
+    # hooks use.
+    pgdata = root_mount / "var/lib/postgres/data"
+    if pgdata.exists() and (pgdata / "PG_VERSION").exists():
+        libcalamares.utils.debug("shedos_finalize: PG cluster already present")
     else:
-        libcalamares.utils.warning(f"shedos_finalize: pacman -Sy failed with code {result}")
+        libcalamares.utils.debug("shedos_finalize: Initializing PG cluster")
 
-    # Install required font packages
-    libcalamares.utils.debug("shedos_finalize: Installing font packages")
-    font_packages = ["ttf-font-awesome", "ttf-nerd-fonts-symbols"]
-    result = os.system(f"arch-chroot {root_mount_point} pacman -S --noconfirm {' '.join(font_packages)} 2>/dev/null")
-    if result == 0:
-        libcalamares.utils.debug("shedos_finalize: Font packages installed")
-    else:
-        libcalamares.utils.warning(f"shedos_finalize: Font package installation failed with code {result}")
-    
-    # Update font cache
-    result = os.system(f"arch-chroot {root_mount_point} fc-cache -fv 2>/dev/null")
-    if result == 0:
-        libcalamares.utils.debug("shedos_finalize: Font cache updated")
-    else:
-        libcalamares.utils.warning(f"shedos_finalize: Font cache update failed with code {result}")
+        # Ensure data dir exists and is owned by postgres (0700). The package
+        # post-install should have done this, but we don't want to rely on it.
+        for cmd in (
+            ["mkdir", "-p", "/var/lib/postgres/data"],
+            ["chown", "postgres:postgres",
+             "/var/lib/postgres", "/var/lib/postgres/data"],
+            ["chmod", "0700", "/var/lib/postgres/data"],
+        ):
+            r = _run(_chroot(root_mount_point, cmd))
+            if r.returncode != 0:
+                _log_cmd_failure(" ".join(cmd), r)
 
-    # Enable services
-    enabled_count = 0
+        r = _run(_chroot(
+            root_mount_point,
+            ["runuser", "-u", "postgres", "--",
+             "initdb",
+             "--locale=en_US.UTF-8",
+             "--encoding=UTF8",
+             "--data-checksums",
+             "-D", "/var/lib/postgres/data"],
+        ))
+        if r.returncode != 0:
+            _log_cmd_failure("postgres initdb", r)
+
+        # Verify from Python — exit codes lie sometimes.
+        if not (pgdata / "PG_VERSION").exists():
+            libcalamares.utils.warning(
+                "shedos_finalize: PG_VERSION missing after initdb. "
+                "postgresql.service will not start on first boot unless the "
+                "shedos-pg-initdb.service fallback succeeds. To fix manually: "
+                "`sudo -iu postgres initdb --locale=en_US.UTF-8 "
+                "--encoding=UTF8 --data-checksums -D /var/lib/postgres/data`."
+            )
+
+    # ── 7b. Bootstrap a Postgres role + database for the installed user ──
+    # Runs an ephemeral postgres via pg_ctl (no systemd) bound to a unix
+    # socket in /tmp, creates a role matching the OS username with LOGIN +
+    # CREATEDB, optionally sets the install password, and creates a same-
+    # named database they own. Arch's default pg_hba has `local all all peer`
+    # so they can `psql` from their shell with no flags.
+    if (pgdata / "PG_VERSION").exists() and username:
+        _bootstrap_pg_user(root_mount_point, username)
+
+    # ── 8. Enable services ─────────────────────────────────────────────
+    libcalamares.utils.debug("shedos_finalize: Enabling services")
+    ok, bad = [], []
     for service in SERVICES:
-        result = os.system(f"arch-chroot {root_mount_point} systemctl enable {service} 2>/dev/null")
-        if result == 0:
-            libcalamares.utils.debug(f"shedos_finalize: Enabled {service}")
-            enabled_count += 1
+        if _enable_one_service(root_mount_point, root_mount, service):
+            ok.append(service)
         else:
-            libcalamares.utils.debug(f"shedos_finalize: Could not enable {service}")
+            bad.append(service)
+    libcalamares.utils.debug(
+        f"shedos_finalize: services enabled {len(ok)}/{len(SERVICES)}"
+    )
+    if bad:
+        libcalamares.utils.warning(
+            f"shedos_finalize: {len(bad)} service(s) could not be enabled: "
+            f"{', '.join(bad)}. Run `shedos-check-services` on the installed "
+            f"system to diagnose."
+        )
 
-    libcalamares.utils.debug(f"shedos_finalize: Enabled {enabled_count} services")
-
-    # Configure git for user
+    # ── 9. Git config for the user ─────────────────────────────────────
     if username and fullname:
-        git_configs = [
-            f'git config --global user.name "{fullname}"',
-            'git config --global init.defaultBranch "main"',
-            'git config --global core.editor "nvim"',
-            'git config --global pull.rebase "false"',
+        git_settings = [
+            ("user.name", fullname),
+            ("init.defaultBranch", "main"),
+            ("core.editor", "nvim"),
+            ("pull.rebase", "false"),
+            ("push.default", "current"),
+            ("push.autoSetupRemote", "true"),
+            ("color.ui", "auto"),
+            ("alias.st", "status"),
+            ("alias.co", "checkout"),
+            ("alias.br", "branch"),
+            ("alias.ci", "commit"),
+            ("alias.lg", "log --oneline --graph --decorate"),
+            ("alias.last", "log -1 HEAD"),
+            ("alias.unstage", "reset HEAD --"),
         ]
-
-        for cmd in git_configs:
-            os.system(f"arch-chroot {root_mount_point} su - {username} -c '{cmd}' 2>/dev/null")
-
-        libcalamares.utils.debug("shedos_finalize: Git configured")
-
-    # Create standard XDG user directories (Desktop, Documents, Downloads, etc.)
-    if username:
-        libcalamares.utils.debug(f"shedos_finalize: Creating XDG user directories for {username}")
-        result = os.system(f"arch-chroot {root_mount_point} su - {username} -c 'xdg-user-dirs-update' 2>/dev/null")
-        if result == 0:
-            libcalamares.utils.debug("shedos_finalize: XDG user directories created")
+        git_failed = []
+        for key, value in git_settings:
+            r = _run(_chroot(
+                root_mount_point,
+                ["su", "-", username, "-c",
+                 f"git config --global {shlex.quote(key)} "
+                 f"{shlex.quote(value)}"],
+            ))
+            if r.returncode != 0:
+                git_failed.append(key)
+        if git_failed:
+            libcalamares.utils.warning(
+                f"shedos_finalize: git config failed for keys: {git_failed}"
+            )
         else:
-            libcalamares.utils.warning(f"shedos_finalize: xdg-user-dirs-update failed with code {result}")
+            libcalamares.utils.debug(
+                f"shedos_finalize: git configured ({len(git_settings)} keys)"
+            )
 
-        # Create user 'projects' and 'work' directories (Request: specific settings in finalize)
-        for user_dir in ["projects", "work"]:
-            dir_path = root_mount / "home" / username / user_dir
-            try:
-                dir_path.mkdir(parents=True, exist_ok=True)
-                # Set ownership (uid:gid)
-                # We need to find the uid/gid of the user in the chroot...
-                # Simpler: run mkdir as the user via su
-                os.system(f"arch-chroot {root_mount_point} su - {username} -c 'mkdir -p ~/{user_dir}'")
-                libcalamares.utils.debug(f"shedos_finalize: Created ~/{user_dir}")
-            except Exception as e:
-                libcalamares.utils.warning(f"shedos_finalize: Could not create ~/{user_dir}: {e}")
+    # ── 10. XDG user directories + ~/projects, ~/work ──────────────────
+    _run(_chroot(root_mount_point,
+                 ["su", "-", username, "-c", "xdg-user-dirs-update"]))
+    for user_dir in ("projects", "work"):
+        _run(_chroot(root_mount_point,
+                     ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
 
-    # Force SDDM Theme to Catppuccin
-    # Calamares displaymanager module might have written defaults (breeze). We overwrite/ensure this.
-    sddm_theme_config = """[Theme]
-Current=catppuccin-mocha-mauve
-"""
-    sddm_config_dir = root_mount / "etc" / "sddm.conf.d"
-    sddm_theme_path = sddm_config_dir / "theme.conf"
-    
+    # ── 11. SDDM theme + autologin ─────────────────────────────────────
+    sddm_dir = root_mount / "etc" / "sddm.conf.d"
     try:
-        sddm_config_dir.mkdir(parents=True, exist_ok=True)
-        sddm_theme_path.write_text(sddm_theme_config)
-        libcalamares.utils.debug("shedos_finalize: Enforced Catppuccin SDDM theme")
-        
-        # CLEANUP: Remove Live ISO Autologin Config
-        live_autologin_path = sddm_config_dir / "live-session-autologin.conf"
-        if live_autologin_path.exists():
-            live_autologin_path.unlink()
-            libcalamares.utils.debug("shedos_finalize: REMOVED live-session-autologin.conf")
-        
-        # CREATE: New User Autologin Config (Manual Fallback)
-        # If displaymanager module failed to create it (or basicSetup=false prevented it), we do it here.
-        new_autologin_path = sddm_config_dir / "autologin.conf"
-        autologin_content = f"""[Autologin]
-User={username}
-Session=hyprland
-Relogin=false
-"""
-        # Always write this to ensure the new user gets autologin
-        new_autologin_path.write_text(autologin_content)
-        libcalamares.utils.debug(f"shedos_finalize: CREATED autologin.conf for user {username}")
+        sddm_dir.mkdir(parents=True, exist_ok=True)
+        (sddm_dir / "theme.conf").write_text(
+            "[Theme]\nCurrent=catppuccin-mocha-mauve\n"
+        )
 
-        # Remove any 'breeze' setting from other potential SDDM configs Calamares might have touched
-        # E.g. /etc/sddm.conf or other files in .d
-        for conf_file in sddm_config_dir.glob("*.conf"):
+        # Drop the live-ISO autologin if present
+        live_autologin = sddm_dir / "live-session-autologin.conf"
+        if live_autologin.exists():
+            live_autologin.unlink()
+
+        # Write installed-system autologin.
+        # NOTE: Session= is the filename STEM of a .desktop in
+        # /usr/share/wayland-sessions/. For Hyprland that is `hyprland` (from
+        # hyprland.desktop). Do NOT change to `start-hyprland` — that's the
+        # wrapper binary the .desktop invokes via Exec=, not the session name.
+        # A wrong value makes SDDM silently fall back to the login form.
+        (sddm_dir / "autologin.conf").write_text(
+            f"[Autologin]\nUser={username}\nSession=hyprland\nRelogin=false\n"
+        )
+        libcalamares.utils.debug(
+            f"shedos_finalize: wrote SDDM autologin for {username}"
+        )
+
+        # Replace 'Current=breeze' anywhere the displaymanager module wrote it
+        for conf_file in sddm_dir.glob("*.conf"):
             if conf_file.name == "theme.conf":
                 continue
-            
             try:
                 content = conf_file.read_text()
                 if "Current=breeze" in content:
-                    new_content = content.replace("Current=breeze", "Current=catppuccin-mocha-mauve")
-                    conf_file.write_text(new_content)
-                    libcalamares.utils.debug(f"shedos_finalize: Replaced breeze in {conf_file.name}")
+                    conf_file.write_text(
+                        content.replace("Current=breeze",
+                                        "Current=catppuccin-mocha-mauve")
+                    )
             except Exception as e:
-                libcalamares.utils.warning(f"shedos_finalize: Failed checking {conf_file}: {e}")
-
+                libcalamares.utils.warning(
+                    f"shedos_finalize: checking {conf_file}: {e}"
+                )
     except Exception as e:
-        libcalamares.utils.warning(f"shedos_finalize: Could not configure SDDM theme/autologin: {e}")
+        libcalamares.utils.warning(
+            f"shedos_finalize: SDDM theme/autologin setup: {e}"
+        )
 
-    # Sync filesystems
+    # ── Final sync ─────────────────────────────────────────────────────
     os.system("sync")
-
-    libcalamares.utils.debug("shedos_finalize: Installation finalized successfully")
-    return None  # Success
+    libcalamares.utils.debug("shedos_finalize: Installation finalized")
+    return None
