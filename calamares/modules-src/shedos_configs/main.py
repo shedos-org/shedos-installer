@@ -194,6 +194,46 @@ def run():
     else:
         libcalamares.utils.debug(f"shedos_configs: Wallpaper not found: {wallpaper_src}")
 
+    # Seed Oh My Zsh into the installed user's home.
+    #
+    # /etc/skel ships .zshrc which sources $ZSH/oh-my-zsh.sh where
+    # $ZSH=$HOME/.oh-my-zsh. The oh-my-zsh-git package installs the framework
+    # to /usr/share/oh-my-zsh — useradd -m does NOT copy anything from there.
+    # Without this seed the user's first shell spawn errors with
+    # "no such file or directory: $HOME/.oh-my-zsh/oh-my-zsh.sh".
+    # Parallels the live-ISO copy in archiso/airootfs/root/customize_airootfs.sh.
+    omz_src = root_mount / "usr/share/oh-my-zsh"
+    omz_dest = user_home / ".oh-my-zsh"
+    if omz_src.is_dir():
+        try:
+            if omz_dest.exists():
+                shutil.rmtree(omz_dest)
+            shutil.copytree(omz_src, omz_dest)
+
+            # Symlink powerlevel10k into OMZ's custom-themes dir so .zshrc's
+            # ZSH_THEME="powerlevel10k/powerlevel10k" resolves.
+            p10k_src = Path("/usr/share/zsh-theme-powerlevel10k")
+            p10k_link = omz_dest / "custom/themes/powerlevel10k"
+            p10k_link.parent.mkdir(parents=True, exist_ok=True)
+            if p10k_link.exists() or p10k_link.is_symlink():
+                p10k_link.unlink()
+            # Store the target as an absolute in-target path — symlinks
+            # resolve relative to the booted system, not the live ISO.
+            p10k_link.symlink_to(p10k_src)
+
+            libcalamares.utils.debug(
+                f"shedos_configs: Seeded oh-my-zsh + p10k for {username}"
+            )
+        except Exception as e:
+            libcalamares.utils.warning(
+                f"shedos_configs: Could not seed oh-my-zsh: {e}"
+            )
+    else:
+        libcalamares.utils.warning(
+            f"shedos_configs: {omz_src} missing — oh-my-zsh-git not installed? "
+            f"User's .zshrc will fail on first shell spawn."
+        )
+
     # Fix ownership of all deployed files
     libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
     try:
