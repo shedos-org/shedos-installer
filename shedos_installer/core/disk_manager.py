@@ -142,8 +142,12 @@ class DiskManager:
 
     @property
     def root_partition(self) -> str:
-        """Get root partition path."""
-        return self.get_partition_path(2 if self.config.efi else 2)
+        """Get root partition path.
+
+        Both partition layouts (UEFI: ESP=1, root=2; BIOS: bios_grub=1,
+        root=2) put root at partition 2 — no per-mode branching needed.
+        """
+        return self.get_partition_path(2)
 
     @property
     def boot_partition(self) -> Optional[str]:
