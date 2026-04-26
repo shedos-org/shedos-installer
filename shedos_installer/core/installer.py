@@ -183,14 +183,24 @@ class Installer:
             logger.error(f"pacstrap error: {e}")
             return False
 
-        # Initialize keyring in the new system
+        # Initialize keyring in the new system. Failure here doesn't
+        # block install (first `pacman -Syu` on the booted system will
+        # re-init), but a silent failure makes signature errors at
+        # first-boot mysterious — log loudly.
         logger.info("Initializing pacman keyring in new system...")
         keyring_cmds = [
             ["arch-chroot", str(self.mount_point), "pacman-key", "--init"],
             ["arch-chroot", str(self.mount_point), "pacman-key", "--populate", "archlinux"],
         ]
         for kcmd in keyring_cmds:
-            subprocess.run(kcmd, timeout=300)
+            kres = subprocess.run(
+                kcmd, timeout=300, capture_output=True, text=True
+            )
+            if kres.returncode != 0:
+                logger.warning(
+                    f"keyring init step failed (rc={kres.returncode}): "
+                    f"{' '.join(kcmd)}\nstderr: {kres.stderr}"
+                )
 
         # Verify installation succeeded by checking for key files
         if not (self.mount_point / "etc" / "os-release").exists():
@@ -355,19 +365,34 @@ fallback_options="-S autodetect"
         logger.info("Configuring system")
 
         # Set timezone
-        run_chroot([
+        tz_result = run_chroot([
             "ln", "-sf",
             f"/usr/share/zoneinfo/{self.config.system.timezone}",
             "/etc/localtime",
         ], str(self.mount_point))
-        run_chroot(["hwclock", "--systohc"], str(self.mount_point))
+        if not tz_result.success:
+            logger.warning(
+                f"timezone link failed: {tz_result.stderr} — "
+                f"system will boot in UTC; user can fix with timedatectl"
+            )
+        clock_result = run_chroot(["hwclock", "--systohc"], str(self.mount_point))
+        if not clock_result.success:
+            logger.warning(
+                f"hwclock --systohc failed: {clock_result.stderr} — "
+                f"hardware clock will drift relative to system time"
+            )
 
         # Set locale
         locale_gen = self.mount_point / "etc" / "locale.gen"
         content = locale_gen.read_text()
         content = content.replace(f"#{self.config.system.locale}", self.config.system.locale)
         locale_gen.write_text(content)
-        run_chroot(["locale-gen"], str(self.mount_point))
+        locale_result = run_chroot(["locale-gen"], str(self.mount_point))
+        if not locale_result.success:
+            logger.error(
+                f"locale-gen failed: {locale_result.stderr} — "
+                f"system will fall back to C.UTF-8 on first boot"
+            )
 
         locale_conf = self.mount_point / "etc" / "locale.conf"
         locale_conf.write_text(f"LANG={self.config.system.locale}\n")
@@ -472,24 +497,32 @@ fallback_options="-S autodetect"
         return True
 
     def _configure_git(self, user) -> None:
-        """Configure git for the user."""
+        """Configure git for the user.
+
+        Failure of any individual git config step is logged but
+        non-fatal — the user can re-run `git config --global` after
+        first login if anything didn't take.
+        """
         git_name = user.full_name or user.username
         git_email = user.email
 
-        if git_name:
-            run_command([
+        def _gitconfig(key: str, value: str) -> None:
+            res = run_command([
                 "arch-chroot", str(self.mount_point),
                 "su", "-", user.username, "-c",
-                f'git config --global user.name "{git_name}"'
+                f'git config --global {key} "{value}"'
             ])
+            if not res.success:
+                logger.warning(
+                    f"git config {key}={value!r} failed: {res.stderr}"
+                )
+
+        if git_name:
+            _gitconfig("user.name", git_name)
             logger.info(f"Git user.name set to: {git_name}")
 
         if git_email:
-            run_command([
-                "arch-chroot", str(self.mount_point),
-                "su", "-", user.username, "-c",
-                f'git config --global user.email "{git_email}"'
-            ])
+            _gitconfig("user.email", git_email)
             logger.info(f"Git user.email set to: {git_email}")
 
         # Set sensible git defaults
@@ -499,11 +532,7 @@ fallback_options="-S autodetect"
             ("pull.rebase", "false"),
         ]
         for key, value in git_defaults:
-            run_command([
-                "arch-chroot", str(self.mount_point),
-                "su", "-", user.username, "-c",
-                f'git config --global {key} "{value}"'
-            ])
+            _gitconfig(key, value)
 
     def install_packages(self) -> bool:
         """Install additional packages for selected profile."""
@@ -582,12 +611,19 @@ fallback_options="-S autodetect"
             except Exception as e:
                 logger.warning(f"Failed to copy {src_name}: {e}")
 
-        # Fix ownership
-        run_chroot([
+        # Fix ownership of everything we just dropped into $HOME.
+        # A failure leaves user-owned files as root — config files
+        # won't be writable from the user session — so log loudly.
+        chown_result = run_chroot([
             "chown", "-R",
             f"{self.config.user.username}:{self.config.user.username}",
             f"/home/{self.config.user.username}",
         ], str(self.mount_point))
+        if not chown_result.success:
+            logger.error(
+                f"chown of /home/{self.config.user.username} failed: "
+                f"{chown_result.stderr}"
+            )
 
         logger.info("Configurations copied")
         return True

@@ -29,12 +29,30 @@ class DiskManager:
             logger.error(f"Failed to wipe disk signatures: {result.stderr}")
             return False
 
-        # Zero out beginning and end of disk
-        run_command(["dd", "if=/dev/zero", f"of={self.device}", "bs=1M", "count=100"])
-        run_command(["dd", "if=/dev/zero", f"of={self.device}", "bs=1M", "count=100", "seek=0", "conv=notrunc"])
+        # Zero out the head of the disk (kills GPT/MBR + LVM headers).
+        # The `seek=0 conv=notrunc` second pass overwrites the same
+        # region without truncating any subsequent partition table.
+        # A failed dd here means the device is read-only or has bad
+        # blocks at offset 0 — neither is recoverable by partitioning,
+        # so abort rather than report success.
+        for dd_cmd in (
+            ["dd", "if=/dev/zero", f"of={self.device}", "bs=1M", "count=100"],
+            ["dd", "if=/dev/zero", f"of={self.device}", "bs=1M",
+             "count=100", "seek=0", "conv=notrunc"],
+        ):
+            dd_result = run_command(dd_cmd)
+            if not dd_result.success:
+                logger.error(
+                    f"Failed to zero disk head: {dd_result.stderr}"
+                )
+                return False
 
-        # Sync
-        run_command(["sync"])
+        # sync is best-effort — failure is logged but doesn't fail the
+        # wipe, since the only non-success case is "no devices to sync"
+        # which is benign.
+        sync_result = run_command(["sync"])
+        if not sync_result.success:
+            logger.warning(f"sync after wipe returned non-zero: {sync_result.stderr}")
 
         logger.info("Disk wiped successfully")
         return True

@@ -33,6 +33,37 @@ def test_wipe_disk_propagates_wipefs_failure(
     assert _disk().wipe_disk() is False
 
 
+def test_wipe_disk_propagates_dd_failure(
+    mock_run_command: MagicMock,
+) -> None:
+    """wipefs succeeds, but dd fails — the wipe must report failure
+    rather than silently proceeding to partition a non-zeroed disk
+    (data-loss risk on the previous partition table)."""
+    def side(cmd, *args, **kwargs):
+        if cmd[0] == "wipefs":
+            return make_result(returncode=0)
+        if cmd[0] == "dd":
+            return make_result(returncode=1, stderr="device read-only")
+        return make_result()
+    mock_run_command.side_effect = side
+    assert _disk().wipe_disk() is False
+
+
+def test_wipe_disk_logs_warning_on_sync_failure_but_succeeds(
+    mock_run_command: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """sync after wipe is best-effort; failure logs a warning but the
+    wipe itself succeeds (the actual zeroing already happened)."""
+    def side(cmd, *args, **kwargs):
+        if cmd[0] == "sync":
+            return make_result(returncode=1, stderr="busy")
+        return make_result()
+    mock_run_command.side_effect = side
+    with caplog.at_level("WARNING"):
+        assert _disk().wipe_disk() is True
+    assert any("sync after wipe" in r.message for r in caplog.records)
+
+
 def test_create_partitions_uefi_uses_gpt_label(
     mock_run_command: MagicMock,
 ) -> None:

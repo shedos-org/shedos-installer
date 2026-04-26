@@ -100,12 +100,22 @@ class BtrfsManager:
                 logger.debug(f"Created subvolume: {subvol.name}")
 
                 # Disable CoW for subvolumes that don't need it
+                # (logs, caches, temp, package cache, VM/container
+                # images). chattr failure isn't fatal — CoW just stays
+                # on, which costs some snapshot space but doesn't break
+                # functionality — but the user should know.
                 if not subvol.cow:
-                    run_command([
+                    chattr_result = run_command([
                         "chattr", "+C",
                         str(self.mount_point / subvol.name),
                     ])
-                    logger.debug(f"Disabled CoW for: {subvol.name}")
+                    if chattr_result.success:
+                        logger.debug(f"Disabled CoW for: {subvol.name}")
+                    else:
+                        logger.warning(
+                            f"chattr +C on {subvol.name} failed: "
+                            f"{chattr_result.stderr}"
+                        )
 
             logger.info(f"Created {len(self.subvolumes)} subvolumes")
             return True
