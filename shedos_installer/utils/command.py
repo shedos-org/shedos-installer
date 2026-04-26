@@ -29,8 +29,16 @@ def run_command(
     timeout: Optional[int] = None,
     chroot: Optional[str] = None,
     env: Optional[dict[str, str]] = None,
+    input: Optional[str] = None,
 ) -> CommandResult:
-    """Run a command and return the result."""
+    """Run a command and return the result.
+
+    `input`, when set, is forwarded to subprocess.run as text passed
+    on stdin — the right way to feed secrets (LUKS passwords, chpasswd
+    user:pass pairs) to commands that read from stdin without piping
+    them through a shell where they could be word-split or injection-
+    interpreted.
+    """
     if chroot:
         cmd = ["arch-chroot", chroot] + cmd
 
@@ -40,6 +48,7 @@ def run_command(
     try:
         result = subprocess.run(
             cmd,
+            input=input,
             capture_output=capture_output,
             text=True,
             timeout=timeout,

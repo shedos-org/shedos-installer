@@ -20,17 +20,29 @@ class LuksManager:
         self.mapper_path = f"/dev/mapper/{self.MAPPER_NAME}"
 
     def format_luks(self) -> bool:
-        """Format device with LUKS encryption."""
+        """Format device with LUKS encryption.
+
+        Password is passed via stdin (`--key-file -`) rather than
+        interpolated into a shell command — this is the only safe way
+        to handle a password that may contain shell metacharacters
+        (apostrophes, dollar signs, semicolons, ...).
+        """
         logger.info(f"Formatting {self.device} with LUKS")
 
-        # Create LUKS container
-        # Using echo to pipe password is not ideal, but works for installer
-        result = run_command([
-            "sh", "-c",
-            f"echo -n '{self.password}' | cryptsetup luksFormat --type luks2 "
-            f"--cipher aes-xts-plain64 --key-size 512 --hash sha512 "
-            f"--iter-time 5000 --use-urandom {self.device} -"
-        ])
+        result = run_command(
+            [
+                "cryptsetup", "luksFormat", "--type", "luks2",
+                "--cipher", "aes-xts-plain64",
+                "--key-size", "512",
+                "--hash", "sha512",
+                "--iter-time", "5000",
+                "--use-urandom",
+                "--batch-mode",
+                "--key-file", "-",
+                self.device,
+            ],
+            input=self.password,
+        )
 
         if not result.success:
             logger.error(f"Failed to format LUKS: {result.stderr}")
@@ -40,13 +52,20 @@ class LuksManager:
         return True
 
     def open_luks(self) -> Optional[str]:
-        """Open LUKS container and return mapper device path."""
+        """Open LUKS container and return mapper device path.
+
+        Password is passed via stdin. See format_luks() for rationale.
+        """
         logger.info(f"Opening LUKS container on {self.device}")
 
-        result = run_command([
-            "sh", "-c",
-            f"echo -n '{self.password}' | cryptsetup open {self.device} {self.MAPPER_NAME} -"
-        ])
+        result = run_command(
+            [
+                "cryptsetup", "open",
+                "--key-file", "-",
+                self.device, self.MAPPER_NAME,
+            ],
+            input=self.password,
+        )
 
         if not result.success:
             logger.error(f"Failed to open LUKS: {result.stderr}")

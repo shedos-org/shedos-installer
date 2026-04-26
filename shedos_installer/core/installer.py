@@ -1,6 +1,7 @@
 """Main installer orchestrator for ShedOS."""
 
 import logging
+import shlex
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -450,11 +451,15 @@ fallback_options="-S autodetect"
             logger.error(f"Failed to create user: {result.stderr}")
             return False
 
-        # Set password
-        result = run_command([
-            "sh", "-c",
-            f"echo '{user.username}:{user.password}' | arch-chroot {self.mount_point} chpasswd"
-        ])
+        # Set password — pass user:pass via stdin to chpasswd. Going
+        # through `sh -c "echo ... | chpasswd"` would interpolate the
+        # password into a shell string, which breaks (or worse, executes
+        # arbitrary code) for passwords containing apostrophes / dollar
+        # signs / backticks.
+        result = run_command(
+            ["arch-chroot", str(self.mount_point), "chpasswd"],
+            input=f"{user.username}:{user.password}\n",
+        )
 
         if not result.success:
             logger.error("Failed to set user password")
@@ -719,7 +724,11 @@ fallback_options="-S autodetect"
         logger.info(f"Installing {len(packages)} AUR packages")
 
         username = self.config.user.username
-        pkg_str = " ".join(packages)
+        # `su -c` takes a single shell command, so we can't avoid the
+        # shell here. Defense in depth: shlex.quote each package name
+        # so a list entry containing whitespace or shell metacharacters
+        # can't break out of the yay invocation.
+        pkg_str = " ".join(shlex.quote(p) for p in packages)
 
         result = run_command([
             "arch-chroot", str(self.mount_point),

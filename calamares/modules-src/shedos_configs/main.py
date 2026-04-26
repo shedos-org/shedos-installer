@@ -9,6 +9,7 @@ Deploys pre-configured dotfiles to the user's home directory.
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import libcalamares
@@ -237,11 +238,22 @@ def run():
     # Fix ownership of all deployed files
     libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
     try:
-        # Use os.system for simplicity in chroot context
-        chroot_cmd = f"arch-chroot {root_mount_point} chown -R {username}:{username} /home/{username}"
-        result = os.system(chroot_cmd)
-        if result != 0:
-            libcalamares.utils.warning(f"shedos_configs: chown command returned {result}")
+        # subprocess.run with an argv list — never construct a shell
+        # string from interpolated paths/usernames. A path containing
+        # spaces (e.g. user mounts target on /mnt/SSD 2/) would break
+        # the os.system() form silently.
+        result = subprocess.run(
+            [
+                "arch-chroot", str(root_mount_point), "chown", "-R",
+                f"{username}:{username}", f"/home/{username}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            libcalamares.utils.warning(
+                f"shedos_configs: chown returned {result.returncode}: {result.stderr}"
+            )
     except Exception as e:
         libcalamares.utils.warning(f"shedos_configs: Could not fix ownership: {e}")
 
@@ -323,10 +335,19 @@ def run():
         )
 
         if manifest_root.exists():
-            os.system(
-                f"arch-chroot {root_mount_point} "
-                f"chown -R {username}:{username} /home/{username}/.local"
+            chown_res = subprocess.run(
+                [
+                    "arch-chroot", str(root_mount_point), "chown", "-R",
+                    f"{username}:{username}", f"/home/{username}/.local",
+                ],
+                capture_output=True,
+                text=True,
             )
+            if chown_res.returncode != 0:
+                libcalamares.utils.warning(
+                    f"shedos_configs: chown of .local returned "
+                    f"{chown_res.returncode}: {chown_res.stderr}"
+                )
     except Exception as e:
         libcalamares.utils.warning(
             f"shedos_configs: Could not seed sync-configs manifest: {e}"
@@ -336,13 +357,17 @@ def run():
     # Running this during install guarantees the DB exists on first boot
     libcalamares.utils.debug("shedos_configs: Initializing pacman databases...")
     try:
-        # We are already in the chroot context basically, but we need to execute inside it properly
-        # Using arch-chroot to ensure network and mounts are correct
-        res = os.system(f"arch-chroot {root_mount_point} pacman -Sy --noconfirm")
-        if res != 0:
-             libcalamares.utils.warning(f"shedos_configs: pacman -Sy returned {res}")
+        res = subprocess.run(
+            ["arch-chroot", str(root_mount_point), "pacman", "-Sy", "--noconfirm"],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            libcalamares.utils.warning(
+                f"shedos_configs: pacman -Sy returned {res.returncode}: {res.stderr}"
+            )
         else:
-             libcalamares.utils.debug("shedos_configs: Pacman DB initialized successfully")
+            libcalamares.utils.debug("shedos_configs: Pacman DB initialized successfully")
     except Exception as e:
         libcalamares.utils.warning(f"shedos_configs: Failed to init pacman db: {e}")
 
@@ -351,31 +376,46 @@ def run():
     # CRITICAL: In live session, secrets are often in keyring. We must force them to file first.
     libcalamares.utils.debug("shedos_configs: Persisting NetworkManager connections...")
     try:
-        import subprocess
-        
         # 1. Find active WiFi connection UUIDs
         try:
-            # -t terse, -f fields
-            cmd = "nmcli -t -f UUID,TYPE,DEVICE connection show --active"
-            output = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
-            
+            output = subprocess.check_output(
+                ["nmcli", "-t", "-f", "UUID,TYPE,DEVICE",
+                 "connection", "show", "--active"],
+                text=True,
+            ).strip()
+
             for line in output.split('\n'):
-                if not line: continue
+                if not line:
+                    continue
                 parts = line.split(':')
                 if len(parts) >= 2 and parts[1] == "802-11-wireless":
                     uuid = parts[0]
                     libcalamares.utils.debug(f"shedos_configs: Found active WiFi UUID: {uuid}")
-                    
+
                     # 2. Force secrets to be stored in file (0) instead of keyring
                     # 3. Make connection available to all users (permissions="")
-                    subprocess.run(f"nmcli connection modify {uuid} 802-11-wireless-security.psk-flags 0", shell=True)
-                    subprocess.run(f"nmcli connection modify {uuid} connection.permissions ''", shell=True)
-                    
                     # 4. Save changes to disk immediately
-                    subprocess.run(f"nmcli connection save {uuid}", shell=True)
+                    # All argv-list (no shell) — UUIDs come from nmcli but
+                    # using shell=True with f-string interpolation here
+                    # would shell-inject if any value ever carried a shell
+                    # metacharacter.
+                    subprocess.run(
+                        ["nmcli", "connection", "modify", uuid,
+                         "802-11-wireless-security.psk-flags", "0"],
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["nmcli", "connection", "modify", uuid,
+                         "connection.permissions", ""],
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["nmcli", "connection", "save", uuid],
+                        check=False,
+                    )
                     libcalamares.utils.debug(f"shedos_configs: Forced persistence for {uuid}")
         except Exception as nm_e:
-             libcalamares.utils.warning(f"shedos_configs: Failed to prepare NM connections: {nm_e}")
+            libcalamares.utils.warning(f"shedos_configs: Failed to prepare NM connections: {nm_e}")
 
         # 5. Copy the connection files
         source_connections = Path("/etc/NetworkManager/system-connections")
@@ -409,7 +449,16 @@ def run():
                 libcalamares.utils.debug(
                     f"shedos_configs: Copied {nm_count} NM connection profiles"
                 )
-                os.system(f"chown -R root:root {target_connections}")
+                chown_res = subprocess.run(
+                    ["chown", "-R", "root:root", str(target_connections)],
+                    capture_output=True,
+                    text=True,
+                )
+                if chown_res.returncode != 0:
+                    libcalamares.utils.warning(
+                        f"shedos_configs: chown of NM target returned "
+                        f"{chown_res.returncode}: {chown_res.stderr}"
+                    )
             nm_landed = sorted(p.name for p in target_connections.iterdir())
             libcalamares.utils.debug(
                 f"shedos_configs: NM target listing: {nm_landed}"
@@ -455,7 +504,16 @@ def run():
                     f"shedos_configs: Copied {iwd_count} iwd profiles"
                 )
                 os.chmod(target_iwd, 0o700)
-                os.system(f"chown -R root:root {target_iwd}")
+                iwd_chown = subprocess.run(
+                    ["chown", "-R", "root:root", str(target_iwd)],
+                    capture_output=True,
+                    text=True,
+                )
+                if iwd_chown.returncode != 0:
+                    libcalamares.utils.warning(
+                        f"shedos_configs: chown of iwd target returned "
+                        f"{iwd_chown.returncode}: {iwd_chown.stderr}"
+                    )
             if target_iwd.exists():
                 iwd_landed = sorted(p.name for p in target_iwd.iterdir())
                 libcalamares.utils.debug(

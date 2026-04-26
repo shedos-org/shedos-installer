@@ -54,6 +54,12 @@ def mock_run_command(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr("shedos_installer.core.luks_manager.run_command", mock)
     monkeypatch.setattr("shedos_installer.core.disk_manager.run_command", mock)
     monkeypatch.setattr("shedos_installer.core.btrfs_manager.run_command", mock)
+    # installer.py imports both run_command and run_chroot directly.
+    # run_chroot in command.py resolves run_command via module scope,
+    # which the first patch above already covers — but installer.py's
+    # own binding of run_command is independent and needs its own patch.
+    monkeypatch.setattr("shedos_installer.core.installer.run_command", mock)
+    monkeypatch.setattr("shedos_installer.core.installer.run_chroot", mock)
     return mock
 
 
