@@ -151,7 +151,6 @@ def get_gpus() -> list[GpuInfo]:
     for line in result.stdout.splitlines():
         match = vga_pattern.search(line)
         if match:
-            pci_id = match.group(1)
             description = match.group(2)
             vendor_device = match.group(3)
 

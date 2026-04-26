@@ -693,9 +693,9 @@ fallback_options="-S autodetect"
         username = self.config.user.username
 
         commands = [
-            f"cd /tmp && git clone https://aur.archlinux.org/yay-bin.git",
-            f"cd /tmp/yay-bin && makepkg -si --noconfirm",
-            f"rm -rf /tmp/yay-bin",
+            "cd /tmp && git clone https://aur.archlinux.org/yay-bin.git",
+            "cd /tmp/yay-bin && makepkg -si --noconfirm",
+            "rm -rf /tmp/yay-bin",
         ]
 
         for cmd in commands:
@@ -703,6 +703,11 @@ fallback_options="-S autodetect"
                 "arch-chroot", str(self.mount_point),
                 "su", "-", username, "-c", cmd,
             ])
+            if not result.success:
+                logger.error(
+                    "yay bootstrap step failed (%s): %s", cmd, result.stderr
+                )
+                return False
 
         return True
 
