@@ -59,7 +59,6 @@ SERVICES = [
 
     # Socket-activated (zero idle cost, start on first connection)
     "cups.socket",                    # printing
-    "libvirtd.socket",                # VM mgmt (virt-manager, virsh)
 ]
 
 
@@ -437,11 +436,12 @@ def run():
     except Exception as e:
         libcalamares.utils.warning(f"shedos_finalize: /etc/shells update: {e}")
 
-    # ── 4. Groups: docker + libvirt ────────────────────────────────────
-    for group in ("docker", "libvirt"):
-        r = _run(_chroot(root_mount_point, ["usermod", "-aG", group, username]))
-        if r.returncode != 0:
-            _log_cmd_failure(f"usermod -aG {group} {username}", r)
+    # ── 4. Groups: docker ──────────────────────────────────────────────
+    # libvirt was dropped from the default install; users who add libvirt
+    # later can `usermod -aG libvirt $USER` themselves.
+    r = _run(_chroot(root_mount_point, ["usermod", "-aG", "docker", username]))
+    if r.returncode != 0:
+        _log_cmd_failure(f"usermod -aG docker {username}", r)
 
     # ── 5. Pacman keyring init ─────────────────────────────────────────
     for kcmd in (["pacman-key", "--init"],
