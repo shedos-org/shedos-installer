@@ -52,13 +52,9 @@ SERVICES = [
     "docker.service",                 # containerized dev workflows
 
     # System services
-    "cronie.service",                 # cron (timeshift dep + user crontabs)
-    "avahi-daemon.service",           # mDNS / .local discovery
+    "cronie.service",                 # cron (user crontabs)
     "thermald.service",               # Intel CPU thermal mgmt (no-op on AMD)
     "power-profiles-daemon.service",  # desktop-integrated power profiles
-
-    # Socket-activated (zero idle cost, start on first connection)
-    "cups.socket",                    # printing
 ]
 
 
