@@ -54,7 +54,6 @@ SERVICES = [
     # System services
     "cronie.service",                 # cron (user crontabs)
     "thermald.service",               # Intel CPU thermal mgmt (no-op on AMD)
-    "power-profiles-daemon.service",  # desktop-integrated power profiles
 ]
 
 
