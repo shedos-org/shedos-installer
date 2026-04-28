@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-#
-# ShedOS Git Configuration Module
-# Configures git with user information collected during installation
-#
+
+"""Seed the new user's ~/.gitconfig with ShedOS defaults. user.email is
+left for the welcome script — we only have user.name (Calamares fullname)
+to work with at install time."""
 
 import os
 import libcalamares
@@ -13,12 +13,8 @@ def pretty_name():
     return "Configuring git for developer workflow"
 
 def run():
-    """Configure git with user information."""
-
-    # Get user info from global storage
     gs = libcalamares.globalstorage
 
-    # Get user info from users module
     username = gs.value("username")
     fullname = gs.value("fullName")
 
@@ -36,11 +32,9 @@ def run():
         libcalamares.utils.warning("No root mount point found")
         return None
 
-    # Path to user's home directory in the installed system
     user_home = os.path.join(root_mount, "home", username)
     gitconfig_path = os.path.join(user_home, ".gitconfig")
 
-    # Email will be configured by user on first login
     gitconfig_content = f"""# ShedOS Git Configuration
 # Generated during installation
 # Set your email: git config --global user.email "your@email.com"
@@ -76,16 +70,13 @@ def run():
 """
 
     try:
-        # Ensure home directory exists
         os.makedirs(user_home, exist_ok=True)
-        
-        # Write the gitconfig file
+
         with open(gitconfig_path, 'w') as f:
             f.write(gitconfig_content)
 
         libcalamares.utils.debug(f"Git config written to {gitconfig_path}")
 
-        # Fix ownership using chroot
         check_target_env_call(['chown', f'{username}:{username}', f'/home/{username}/.gitconfig'])
 
         libcalamares.utils.debug("Git configuration complete")

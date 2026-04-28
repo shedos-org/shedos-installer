@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-ShedOS NVIDIA Driver Module for Calamares
-
-Handles NVIDIA GPU detection and proprietary driver installation.
-Installs nvidia-open-dkms and related packages, and enables NVIDIA
-systemd services for proper suspend/hibernate support.
-"""
+"""Install nvidia-open-dkms + companions in the target root and enable
+nvidia-{suspend,hibernate,resume}.service so suspend works on first
+boot. Skipped entirely when shedos_install_nvidia globalstorage key is
+falsy."""
 
 import sys
 from pathlib import Path
 
 import libcalamares
 
-# Add shedos_installer to Python path
-# The installer package is at /opt/shedos-installer/ in the live ISO
 INSTALLER_ROOT = Path("/opt/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
@@ -25,29 +20,13 @@ from shedos_installer.utils.hardware import get_gpus
 
 
 def pretty_name():
-    """Return the display name for this module."""
     return "Configuring NVIDIA drivers"
 
 
 def run():
-    """
-    Main entry point for the module.
-
-    Installs NVIDIA drivers if an NVIDIA GPU was detected and
-    the user's profile supports it.
-    """
-    # Check if NVIDIA installation is needed
     install_nvidia = libcalamares.globalstorage.value("shedos_install_nvidia")
 
-    # If key is missing/None, check hardware directly to see if we should auto-install
-    # Or assume manual selection was meant.
-    # For now, let's respect the explicit key, but if missing, verify GPU?
-    # Keeping original logic usually safe, but check if key is ever set.
-    # PROACTIVE FIX: If key is unset, default to False? Or detect?
-    # Original code:
     if not install_nvidia:
-        # Check if we should auto-detect?
-        # User requested robustness. Let's rely on standard logic but logging debug.
         libcalamares.utils.debug("NVIDIA installation check: shedos_install_nvidia is False/None")
         return None
 
@@ -55,7 +34,6 @@ def run():
     if not root_mount_point:
         root_mount_point = "/tmp/calamares-root"
 
-    # Read NVIDIA packages from package list
     nvidia_packages = []
     nvidia_pkg_file = PACKAGE_DIR / "nvidia.txt"
 
@@ -66,7 +44,6 @@ def run():
             if line and not line.startswith("#"):
                 nvidia_packages.append(line)
     else:
-        # Fallback to essential NVIDIA packages
         nvidia_packages = [
             "nvidia-open-dkms",
             "nvidia-utils",
@@ -81,18 +58,16 @@ def run():
 
     libcalamares.utils.debug(f"Installing NVIDIA packages: {nvidia_packages}")
 
-    # Install NVIDIA packages
     result = run_chroot(
         ["pacman", "-S", "--noconfirm", "--needed"] + nvidia_packages,
         mount_point=root_mount_point,
-        timeout=600  # 10 minute timeout
+        timeout=600,
     )
 
     if not result.success:
+        # Non-fatal: user can `pacman -S` the failed packages post-install.
         libcalamares.utils.warning(f"NVIDIA package installation had issues: {result.stderr}")
-        # Don't fail the installation - user can fix later
 
-    # Enable NVIDIA systemd services for proper power management
     nvidia_services = [
         "nvidia-suspend.service",
         "nvidia-hibernate.service",
@@ -102,14 +77,13 @@ def run():
     for service in nvidia_services:
         result = run_chroot(
             ["systemctl", "enable", service],
-            mount_point=root_mount_point
+            mount_point=root_mount_point,
         )
         if result.success:
             libcalamares.utils.debug(f"Enabled {service}")
         else:
             libcalamares.utils.warning(f"Could not enable {service}")
 
-    # Log GPU information
     gpus = get_gpus()
     for gpu in gpus:
         if gpu.is_nvidia:
@@ -119,4 +93,4 @@ def run():
 
     libcalamares.utils.debug("NVIDIA driver configuration complete")
 
-    return None  # Success
+    return None

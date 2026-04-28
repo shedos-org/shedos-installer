@@ -56,14 +56,12 @@ class LimineInstaller:
         logger.info("Installing Limine for UEFI")
 
         try:
-            # Create EFI directory structure
             efi_dir = self.mount_point / "boot" / "efi" / "EFI" / "BOOT"
             efi_dir.mkdir(parents=True, exist_ok=True)
 
             limine_dir = self.mount_point / "boot" / "efi" / "EFI" / "limine"
             limine_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy Limine files
             limine_src = Path("/usr/share/limine")
             bootx64_src = limine_src / "BOOTX64.EFI"
 
@@ -71,19 +69,17 @@ class LimineInstaller:
                 logger.error(f"Limine EFI file not found: {bootx64_src}")
                 return False
 
-            # Copy BOOTX64.EFI to BOOT directory (fallback)
             logger.info(f"Copying {bootx64_src} to {efi_dir / 'BOOTX64.EFI'}")
             shutil.copy2(bootx64_src, efi_dir / "BOOTX64.EFI")
 
-            # Copy BOOTX64.EFI to limine directory
             logger.info(f"Copying {bootx64_src} to {limine_dir / 'BOOTX64.EFI'}")
             shutil.copy2(bootx64_src, limine_dir / "BOOTX64.EFI")
 
-            # Create config in /EFI/limine/ directory
             if not self._create_config(limine_dir):
                 return False
 
-            # CRITICAL: Also create config at ESP root where Limine looks by default
+            # ESP root is where Limine looks by default; the /EFI/limine/
+            # config alone is not enough.
             esp_root = self.mount_point / "boot" / "efi"
             return self._create_config(esp_root)
 
@@ -214,16 +210,15 @@ class LimineInstaller:
         if self.luks_uuid:
             hooks.append("encrypt")
 
-        # Note: fsck is NOT included because btrfs handles its own integrity
-        # and fsck hook can cause issues with btrfs filesystems
+        # Skip fsck — btrfs handles its own integrity, and the fsck hook
+        # can break boot on btrfs roots.
         hooks.append("filesystems")
 
-        # Add btrfs module
         modules = "MODULES=(btrfs)"
         if self.nvidia:
             modules = "MODULES=(btrfs nvidia nvidia_modeset nvidia_uvm nvidia_drm)"
 
-        # Add font files for Plymouth rendering
+        # Plymouth needs these fonts inside the initramfs to render text.
         files = [
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/usr/share/fonts/noto/NotoSans-Regular.ttf"
@@ -232,12 +227,13 @@ class LimineInstaller:
 
         hooks_line = f"HOOKS=({' '.join(hooks)})"
 
-        # Read current mkinitcpio.conf
         conf_path = self.mount_point / "etc" / "mkinitcpio.conf"
         try:
             content = conf_path.read_text()
 
-            # Replace MODULES and HOOKS lines (remove any archiso-specific hooks)
+            # Replace MODULES/FILES/HOOKS lines so any archiso-specific
+            # hooks (`archiso`, `archiso_loop_mnt`, etc.) on the live ISO
+            # don't survive into the installed system.
             import re
             content = re.sub(r'^MODULES=\(.*\)$', modules, content, flags=re.MULTILINE)
             content = re.sub(r'^FILES=\(.*\)$', files_line, content, flags=re.MULTILINE)
@@ -246,7 +242,6 @@ class LimineInstaller:
             conf_path.write_text(content)
             logger.info(f"Updated mkinitcpio.conf with HOOKS=({' '.join(hooks)}) and FILES=({' '.join(files)})")
 
-            # Regenerate initramfs with verbose output for debugging
             logger.info("Regenerating initramfs...")
             result = run_chroot(
                 ["mkinitcpio", "-P"],
@@ -264,9 +259,9 @@ class LimineInstaller:
                 return False
             logger.info(f"initramfs created at {initramfs_path}")
 
-            # CRITICAL: Copy the freshly generated initramfs to ESP
-            # This must happen AFTER mkinitcpio regeneration to ensure
-            # the ESP has the correct initramfs with LUKS+Plymouth hooks
+            # Copy the freshly regenerated kernel + initramfs to the ESP.
+            # Must run AFTER mkinitcpio so the ESP picks up the variant
+            # with our final HOOKS (LUKS + Plymouth).
             logger.info("Copying freshly generated kernels to ESP...")
             if not self._copy_kernels_to_esp():
                 logger.error("Failed to copy regenerated kernels to ESP")

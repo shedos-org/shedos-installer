@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-ShedOS Configuration Deployment Module for Calamares
-
-Deploys pre-configured dotfiles to the user's home directory.
-"""
+"""Deploy pre-configured dotfiles to the new user's home. Most dotfiles
+now reach the user via /etc/skel; this module handles the residual
+legacy /opt/shedos-installer/configs path, the oh-my-zsh seed, the
+shedos-sync-configs manifest, and persisting WiFi profiles."""
 
 import os
 import shutil
@@ -15,19 +14,15 @@ from pathlib import Path
 import libcalamares
 
 
-# Hardcoded paths - don't rely on imports that may fail
 CONFIG_DIR = Path("/opt/shedos-installer/configs")
 BRANDING_DIR = Path("/opt/shedos-installer/branding")
 
-# Configuration mappings - all configs to be deployed
-# Format: (source_dirname, destination_relative_to_home)
+# (source_dirname, destination_relative_to_home)
 ALL_CONFIGS = [
-    # Desktop environment - all go to .config/hypr
     ("hyprland", ".config/hypr"),
     ("hypridle", ".config/hypr"),
     ("hyprlock", ".config/hypr"),
 
-    # Other desktop apps
     ("waybar", ".config/waybar"),
     ("walker", ".config/walker"),
     ("kitty", ".config/kitty"),
@@ -35,31 +30,24 @@ ALL_CONFIGS = [
     ("rofi", ".config/rofi"),
     ("fastfetch", ".config/fastfetch"),
 
-    # Shell and terminal
     ("starship", ".config"),
     ("tmux", ""),
 
-    # Development tools
     ("nvim", ".config/nvim"),
     ("git", ".config/git"),
     ("mise", ".config/mise"),
     ("vscode", ".config/Code/User"),
 ]
 
-# Files from zsh directory need special handling - they go directly to home
+# zsh files go directly to ~/, not under .config/.
 ZSH_FILES = [".zshrc", ".zprofile", ".p10k.zsh"]
 
 
 def pretty_name():
-    """Return the display name for this module."""
     return "Deploying ShedOS configurations"
 
 
 def run():
-    """
-    Main entry point for the module.
-    Copies pre-configured dotfiles to the new user's home directory.
-    """
     libcalamares.utils.debug("shedos_configs: Starting configuration deployment")
 
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")
@@ -70,19 +58,16 @@ def run():
     root_mount = Path(root_mount_point)
     libcalamares.utils.debug(f"shedos_configs: Root mount point: {root_mount}")
 
-    # Get username from global storage
     username = libcalamares.globalstorage.value("username")
     if not username:
         libcalamares.utils.warning("shedos_configs: No username found, skipping")
-        return None  # Not an error, just nothing to do
+        return None
 
     user_home = root_mount / "home" / username
     libcalamares.utils.debug(f"shedos_configs: User home: {user_home}")
 
-    # Ensure home directory exists
     if not user_home.exists():
         libcalamares.utils.warning(f"shedos_configs: User home not found: {user_home}")
-        # Try to create it
         try:
             user_home.mkdir(parents=True, exist_ok=True)
             libcalamares.utils.debug(f"shedos_configs: Created user home: {user_home}")
@@ -107,7 +92,6 @@ def run():
             "skipping legacy deployment (dotfiles come from /etc/skel)"
         )
 
-    # Deploy all config directories
     for src_name, dest_rel in ALL_CONFIGS if have_legacy_configs else []:
         src_path = CONFIG_DIR / src_name
 
@@ -115,7 +99,6 @@ def run():
             libcalamares.utils.debug(f"shedos_configs: Skipping (not found): {src_name}")
             continue
 
-        # Determine destination path
         if dest_rel:
             dest_path = user_home / dest_rel
         else:
@@ -124,13 +107,10 @@ def run():
         libcalamares.utils.debug(f"shedos_configs: Deploying {src_name} -> {dest_path}")
 
         try:
-            # Ensure parent directory exists
             dest_path.parent.mkdir(parents=True, exist_ok=True)
 
             if src_path.is_dir():
-                # For directories, ensure dest exists for merging
                 dest_path.mkdir(parents=True, exist_ok=True)
-                # Copy all files from source to dest
                 for item in src_path.iterdir():
                     item_dest = dest_path / item.name
                     if item.is_dir():
@@ -141,7 +121,6 @@ def run():
                         shutil.copy2(item, item_dest)
                 libcalamares.utils.debug(f"shedos_configs: Copied dir contents: {src_name}")
             else:
-                # Copy single file
                 shutil.copy2(src_path, dest_path)
                 libcalamares.utils.debug(f"shedos_configs: Copied file: {src_name}")
 
@@ -153,7 +132,6 @@ def run():
             errors.append(error_msg)
             continue
 
-    # Deploy zsh files (special handling - files go directly to home)
     zsh_dir = CONFIG_DIR / "zsh"
     if zsh_dir.exists():
         for filename in ZSH_FILES:
@@ -166,7 +144,6 @@ def run():
                     deployed_count += 1
                 except Exception as e:
                     libcalamares.utils.warning(f"shedos_configs: Failed to copy {filename}: {e}")
-        # Also copy any other files in zsh directory
         for item in zsh_dir.iterdir():
             if item.name not in ZSH_FILES:
                 try:
@@ -181,7 +158,6 @@ def run():
                 except Exception as e:
                     libcalamares.utils.warning(f"shedos_configs: Failed to copy zsh/{item.name}: {e}")
 
-    # Deploy wallpaper
     wallpaper_src = BRANDING_DIR / "wallpapers" / "shedos-default.png"
     if wallpaper_src.exists():
         try:
@@ -235,13 +211,10 @@ def run():
             f"User's .zshrc will fail on first shell spawn."
         )
 
-    # Fix ownership of all deployed files
     libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
     try:
-        # subprocess.run with an argv list — never construct a shell
-        # string from interpolated paths/usernames. A path containing
-        # spaces (e.g. user mounts target on /mnt/SSD 2/) would break
-        # the os.system() form silently.
+        # argv-list, never shell=True with f-string interpolation —
+        # a path with spaces (e.g. /mnt/SSD 2/) would break the shell form.
         result = subprocess.run(
             [
                 "arch-chroot", str(root_mount_point), "chown", "-R",
@@ -257,25 +230,22 @@ def run():
     except Exception as e:
         libcalamares.utils.warning(f"shedos_configs: Could not fix ownership: {e}")
 
-    # Verify deployment
     hyprland_conf = user_home / ".config" / "hypr" / "hyprland.conf"
     if hyprland_conf.exists():
         libcalamares.utils.debug(f"shedos_configs: Verified hyprland.conf exists: {hyprland_conf}")
-        
-        # Add hyprlock to startup for installed systems (login screen experience)
-        # This makes hyprlock launch immediately when Hyprland starts
+
+        # Add `exec-once = hyprlock` so the lock screen appears at login.
+        # Marker-based insertion is brittle but cheap; if /etc/skel's
+        # hyprland.conf is restructured to drop the "Startup Applications"
+        # marker, this falls through silently.
         try:
             content = hyprland_conf.read_text()
-            # Add exec-once = hyprlock at the start of the startup section
             if "exec-once = hyprlock" not in content:
-                # Insert after the "Startup Applications" comment section
                 marker = "# Startup Applications"
                 if marker in content:
-                    # Find the line after the header separator
                     lines = content.split("\n")
                     for i, line in enumerate(lines):
                         if marker in line and i + 2 < len(lines):
-                            # Insert after the separator line (usually "# ────...")
                             insert_index = i + 2
                             lines.insert(insert_index, "exec-once = hyprlock  # Login screen on startup")
                             content = "\n".join(lines)
@@ -353,8 +323,9 @@ def run():
             f"shedos_configs: Could not seed sync-configs manifest: {e}"
         )
 
-    # Initialize Pacman DB (fix for missing core/extra db regression)
-    # Running this during install guarantees the DB exists on first boot
+    # Initialize the pacman DB now so /var/lib/pacman/sync/{core,extra}.db
+    # exists on first boot. Otherwise the user's first `pacman -S` call
+    # has to do an offline-style init that has previously regressed.
     libcalamares.utils.debug("shedos_configs: Initializing pacman databases...")
     try:
         res = subprocess.run(
@@ -371,12 +342,11 @@ def run():
     except Exception as e:
         libcalamares.utils.warning(f"shedos_configs: Failed to init pacman db: {e}")
 
-    # Persist NetworkManager Connections (WiFi)
-    # Calamares networkcfg module can be flaky, so we manually copy active connections
-    # CRITICAL: In live session, secrets are often in keyring. We must force them to file first.
+    # Persist NetworkManager + iwd profiles. Calamares' networkcfg module
+    # can be flaky, and live-session secrets are often only in the keyring
+    # (not on disk) — we force them to file before copying.
     libcalamares.utils.debug("shedos_configs: Persisting NetworkManager connections...")
     try:
-        # 1. Find active WiFi connection UUIDs
         try:
             output = subprocess.check_output(
                 ["nmcli", "-t", "-f", "UUID,TYPE,DEVICE",
@@ -392,13 +362,9 @@ def run():
                     uuid = parts[0]
                     libcalamares.utils.debug(f"shedos_configs: Found active WiFi UUID: {uuid}")
 
-                    # 2. Force secrets to be stored in file (0) instead of keyring
-                    # 3. Make connection available to all users (permissions="")
-                    # 4. Save changes to disk immediately
-                    # All argv-list (no shell) — UUIDs come from nmcli but
-                    # using shell=True with f-string interpolation here
-                    # would shell-inject if any value ever carried a shell
-                    # metacharacter.
+                    # psk-flags=0   → store secret on disk, not keyring
+                    # permissions="" → available to all users
+                    # save           → flush to disk immediately
                     subprocess.run(
                         ["nmcli", "connection", "modify", uuid,
                          "802-11-wireless-security.psk-flags", "0"],
@@ -417,7 +383,6 @@ def run():
         except Exception as nm_e:
             libcalamares.utils.warning(f"shedos_configs: Failed to prepare NM connections: {nm_e}")
 
-        # 5. Copy the connection files
         source_connections = Path("/etc/NetworkManager/system-connections")
         target_connections = root_mount / "etc/NetworkManager/system-connections"
 
@@ -464,10 +429,10 @@ def run():
                 f"shedos_configs: NM target listing: {nm_landed}"
             )
 
-        # 6. Also persist iwd profiles. The waybar network icon launches impala
-        # (an iwd TUI), so most users connect via iwd — whose profiles live in
-        # /var/lib/iwd/*.psk, NOT in NetworkManager's dir. Without this copy,
-        # wifi credentials entered during install are lost on reboot.
+        # iwd profiles. The waybar network icon launches impala (an iwd
+        # TUI), so most users connect via iwd — whose profiles live in
+        # /var/lib/iwd/*.psk, NOT in NetworkManager's dir. Without this
+        # copy, wifi credentials entered during install are lost on reboot.
         source_iwd = Path("/var/lib/iwd")
         target_iwd = root_mount / "var/lib/iwd"
         iwd_count = 0
@@ -520,9 +485,9 @@ def run():
                     f"shedos_configs: iwd target listing: {iwd_landed}"
                 )
 
-        # 7. Bold warning if both sources came up empty — the user will have
-        # to re-enter wifi on first boot. This is the symptom we're trying to
-        # catch loud, not silent.
+        # Loud warning when both sources are empty — the user will have
+        # to re-enter wifi on first boot, and this is the symptom we want
+        # to catch loud rather than silently.
         if nm_count == 0 and iwd_count == 0:
             libcalamares.utils.warning(
                 "shedos_configs: WiFi profiles NOT persisted — user will have "
@@ -531,10 +496,10 @@ def run():
                 "empty or unreadable on the live ISO."
             )
 
-        # 8. Make NetworkManager use iwd as its WiFi backend in the installed
-        # system. Both services are enabled (shedos_finalize SERVICES list) and
-        # without this config they fight over the WiFi device. With iwd as the
-        # backend, NM presents iwd's stored profiles as its own on boot.
+        # Route NetworkManager's WiFi through iwd in the installed
+        # system. Both services are enabled and without this config they
+        # fight over the WiFi device. With iwd as the backend, NM
+        # presents iwd's stored profiles as its own on boot.
         nm_conf_d = root_mount / "etc/NetworkManager/conf.d"
         nm_conf_d.mkdir(parents=True, exist_ok=True)
         (nm_conf_d / "wifi_backend.conf").write_text(
@@ -544,10 +509,10 @@ def run():
         )
         libcalamares.utils.debug("shedos_configs: Wrote NM wifi_backend.conf (iwd)")
 
-        # 9. Ship the live-ISO psk-flags=0 NM drop-in to the installed system
-        # too. Without this, any wifi joined for the FIRST time AFTER install
-        # reverts to agent-owned secrets (stored in the user's login keyring
-        # only) and won't auto-connect on a cold boot.
+        # Ship the live-ISO psk-flags=0 NM drop-in to the installed
+        # system too. Without it, any wifi joined for the FIRST time
+        # AFTER install reverts to agent-owned secrets (stored in the
+        # user's login keyring only) and won't auto-connect on cold boot.
         nm_defaults_src = Path(
             "/etc/NetworkManager/conf.d/20-connection-defaults.conf"
         )
@@ -568,7 +533,6 @@ def run():
     libcalamares.utils.debug(f"shedos_configs: Deployed {deployed_count} configurations")
 
     if errors:
-        # Log errors but don't fail the install
         libcalamares.utils.warning(f"shedos_configs: Completed with {len(errors)} errors")
 
-    return None  # Success
+    return None
