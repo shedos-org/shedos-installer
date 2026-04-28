@@ -314,9 +314,10 @@ class Installer:
         preset_dir.mkdir(parents=True, exist_ok=True)
         kernel_preset = preset_dir / "shedos-kernel.preset"
 
-        kernel_preset_content = """# mkinitcpio preset file for the 'shedos-kernel' package
+        kernel_preset_content = """# mkinitcpio preset file for the 'shedos-kernel' package.
+# Do NOT add ALL_config — setting it forces mkinitcpio into -c <file>
+# mode which silently disables conf.d drop-ins.
 
-ALL_config="/etc/mkinitcpio.conf"
 ALL_kver="/boot/vmlinuz-shedos-kernel"
 
 PRESETS=('default' 'fallback')
