@@ -538,51 +538,14 @@ def run():
             f"system to diagnose."
         )
 
-    # ── 9. Git config for the user ─────────────────────────────────────
-    if username and fullname:
-        git_settings = [
-            ("user.name", fullname),
-            ("init.defaultBranch", "main"),
-            ("core.editor", "nvim"),
-            ("pull.rebase", "false"),
-            ("push.default", "current"),
-            ("push.autoSetupRemote", "true"),
-            ("color.ui", "auto"),
-            ("alias.st", "status"),
-            ("alias.co", "checkout"),
-            ("alias.br", "branch"),
-            ("alias.ci", "commit"),
-            ("alias.lg", "log --oneline --graph --decorate"),
-            ("alias.last", "log -1 HEAD"),
-            ("alias.unstage", "reset HEAD --"),
-        ]
-        git_failed = []
-        for key, value in git_settings:
-            r = _run(_chroot(
-                root_mount_point,
-                ["su", "-", username, "-c",
-                 f"git config --global {shlex.quote(key)} "
-                 f"{shlex.quote(value)}"],
-            ))
-            if r.returncode != 0:
-                git_failed.append(key)
-        if git_failed:
-            libcalamares.utils.warning(
-                f"shedos_finalize: git config failed for keys: {git_failed}"
-            )
-        else:
-            libcalamares.utils.debug(
-                f"shedos_finalize: git configured ({len(git_settings)} keys)"
-            )
-
-    # ── 10. XDG user directories + ~/projects, ~/work ──────────────────
+    # ── 9. XDG user directories + ~/projects, ~/work ──────────────────
     _run(_chroot(root_mount_point,
                  ["su", "-", username, "-c", "xdg-user-dirs-update"]))
     for user_dir in ("projects", "work"):
         _run(_chroot(root_mount_point,
                      ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
 
-    # ── 11. SDDM theme + autologin ─────────────────────────────────────
+    # ── 10. SDDM theme + autologin ─────────────────────────────────────
     sddm_dir = root_mount / "etc" / "sddm.conf.d"
     try:
         sddm_dir.mkdir(parents=True, exist_ok=True)
