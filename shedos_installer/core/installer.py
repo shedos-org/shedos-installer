@@ -250,14 +250,11 @@ class Installer:
         # Cleanup live-specific artifacts
         self._cleanup_live_artifacts()
 
-        # Copy kernel from archiso boot location if not in /boot
-        # The kernel should be in the squashfs, but archiso might have it elsewhere
-        kernel_dst = self.mount_point / "boot" / "vmlinuz-linux"
+        kernel_dst = self.mount_point / "boot" / "vmlinuz-shedos-kernel"
 
         if not kernel_dst.exists():
             logger.info("Kernel not found in /boot, searching archiso locations...")
 
-            # Try multiple possible locations (install_dir can be 'shedos' or 'arch')
             archiso_locations = [
                 Path("/run/archiso/bootmnt/shedos/boot/x86_64"),
                 Path("/run/archiso/bootmnt/arch/boot/x86_64"),
@@ -265,14 +262,13 @@ class Installer:
             ]
 
             for archiso_boot in archiso_locations:
-                archiso_kernel = archiso_boot / "vmlinuz-linux"
+                archiso_kernel = archiso_boot / "vmlinuz-shedos-kernel"
                 if archiso_kernel.exists():
                     logger.info(f"Found kernel at {archiso_kernel}")
                     shutil.copy2(archiso_kernel, kernel_dst)
                     logger.info(f"Copied kernel to {kernel_dst}")
 
-                    # Also copy initramfs if available
-                    for initramfs in ["initramfs-linux.img", "initramfs-linux-fallback.img"]:
+                    for initramfs in ["initramfs-shedos-kernel.img", "initramfs-shedos-kernel-fallback.img"]:
                         src = archiso_boot / initramfs
                         dst = self.mount_point / "boot" / initramfs
                         if src.exists() and not dst.exists():
@@ -314,28 +310,27 @@ class Installer:
             except Exception as e:
                 logger.warning(f"Failed to remove archiso preset: {e}")
 
-        # Ensure standard linux preset exists with correct configuration
         preset_dir = self.mount_point / "etc" / "mkinitcpio.d"
         preset_dir.mkdir(parents=True, exist_ok=True)
-        linux_preset = preset_dir / "linux.preset"
+        kernel_preset = preset_dir / "shedos-kernel.preset"
 
-        # Always write the correct preset for installed system
-        linux_preset_content = """# mkinitcpio preset file for the 'linux' package
+        kernel_preset_content = """# mkinitcpio preset file for the 'shedos-kernel' package
 
 ALL_config="/etc/mkinitcpio.conf"
-ALL_kver="/boot/vmlinuz-linux"
+ALL_kver="/boot/vmlinuz-shedos-kernel"
 
 PRESETS=('default' 'fallback')
 
-default_image="/boot/initramfs-linux.img"
+default_image="/boot/initramfs-shedos-kernel.img"
 
+fallback_image="/boot/initramfs-shedos-kernel-fallback.img"
 fallback_options="-S autodetect"
 """
         try:
-            linux_preset.write_text(linux_preset_content)
-            logger.info("Created standard linux mkinitcpio preset")
+            kernel_preset.write_text(kernel_preset_content)
+            logger.info("Created shedos-kernel mkinitcpio preset")
         except Exception as e:
-            logger.warning(f"Failed to write linux preset: {e}")
+            logger.warning(f"Failed to write shedos-kernel preset: {e}")
 
         # Re-create empty directories for mount points
         for d in ["dev", "proc", "sys", "tmp", "run", "mnt"]:

@@ -21,11 +21,11 @@ def find_kernel_source():
     """Find the kernel in the live environment."""
     # Possible locations for the kernel
     possible_paths = [
-        "/run/archiso/bootmnt/shedos/boot/vmlinuz-linux",
-        "/run/archiso/bootmnt/shedos/boot/x86_64/vmlinuz-linux",
-        "/run/archiso/copytoram/shedos/boot/vmlinuz-linux",
-        "/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux",
-        "/run/archiso/bootmnt/arch/boot/vmlinuz-linux",
+        "/run/archiso/bootmnt/shedos/boot/vmlinuz-shedos-kernel",
+        "/run/archiso/bootmnt/shedos/boot/x86_64/vmlinuz-shedos-kernel",
+        "/run/archiso/copytoram/shedos/boot/vmlinuz-shedos-kernel",
+        "/run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-shedos-kernel",
+        "/run/archiso/bootmnt/arch/boot/vmlinuz-shedos-kernel",
         "/usr/lib/modules/*/vmlinuz",  # Fallback - kernel in modules dir
     ]
 
@@ -44,11 +44,11 @@ def find_kernel_source():
 def find_initramfs_source():
     """Find the initramfs in the live environment."""
     possible_paths = [
-        "/run/archiso/bootmnt/shedos/boot/initramfs-linux.img",
-        "/run/archiso/bootmnt/shedos/boot/x86_64/initramfs-linux.img",
-        "/run/archiso/copytoram/shedos/boot/initramfs-linux.img",
-        "/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img",
-        "/run/archiso/bootmnt/arch/boot/initramfs-linux.img",
+        "/run/archiso/bootmnt/shedos/boot/initramfs-shedos-kernel.img",
+        "/run/archiso/bootmnt/shedos/boot/x86_64/initramfs-shedos-kernel.img",
+        "/run/archiso/copytoram/shedos/boot/initramfs-shedos-kernel.img",
+        "/run/archiso/bootmnt/arch/boot/x86_64/initramfs-shedos-kernel.img",
+        "/run/archiso/bootmnt/arch/boot/initramfs-shedos-kernel.img",
     ]
 
     for path in possible_paths:
@@ -72,7 +72,7 @@ def run():
     # Find and copy kernel
     kernel_src = find_kernel_source()
     if kernel_src:
-        kernel_dst = os.path.join(boot_dir, "vmlinuz-linux")
+        kernel_dst = os.path.join(boot_dir, "vmlinuz-shedos-kernel")
         try:
             libcalamares.utils.debug(f"Copying kernel from {kernel_src} to {kernel_dst}")
             shutil.copy2(kernel_src, kernel_dst)
@@ -92,12 +92,12 @@ def run():
             else:
                 debug_info += f"\n{path}: (does not exist)"
 
-        return ("Kernel not found", f"Could not find vmlinuz-linux in any expected location.{debug_info}")
+        return ("Kernel not found", f"Could not find vmlinuz-shedos-kernel in any expected location.{debug_info}")
 
     # Find and copy initramfs
     initramfs_src = find_initramfs_source()
     if initramfs_src:
-        initramfs_dst = os.path.join(boot_dir, "initramfs-linux.img")
+        initramfs_dst = os.path.join(boot_dir, "initramfs-shedos-kernel.img")
         try:
             libcalamares.utils.debug(f"Copying initramfs from {initramfs_src} to {initramfs_dst}")
             shutil.copy2(initramfs_src, initramfs_dst)
@@ -109,12 +109,12 @@ def run():
 
     # Copy fallback initramfs if it exists
     fallback_paths = [
-        "/run/archiso/bootmnt/shedos/boot/initramfs-linux-fallback.img",
-        "/run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux-fallback.img",
+        "/run/archiso/bootmnt/shedos/boot/initramfs-shedos-kernel-fallback.img",
+        "/run/archiso/bootmnt/arch/boot/x86_64/initramfs-shedos-kernel-fallback.img",
     ]
     for fallback_src in fallback_paths:
         if os.path.exists(fallback_src):
-            fallback_dst = os.path.join(boot_dir, "initramfs-linux-fallback.img")
+            fallback_dst = os.path.join(boot_dir, "initramfs-shedos-kernel-fallback.img")
             try:
                 shutil.copy2(fallback_src, fallback_dst)
                 libcalamares.utils.debug("Fallback initramfs copied")

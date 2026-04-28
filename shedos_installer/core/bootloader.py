@@ -202,11 +202,10 @@ class LimineInstaller:
         """Configure mkinitcpio for BTRFS and optional LUKS."""
         logger.info("Configuring mkinitcpio")
 
-        # Verify kernel exists before proceeding
-        kernel_path = self.mount_point / "boot" / "vmlinuz-linux"
+        kernel_path = self.mount_point / "boot" / "vmlinuz-shedos-kernel"
         if not kernel_path.exists():
             logger.error(f"Kernel not found at {kernel_path}")
-            logger.error("The linux package may not have been installed correctly")
+            logger.error("shedos-kernel may not have been installed correctly")
             return False
         logger.info(f"Kernel found at {kernel_path}")
 
@@ -259,8 +258,7 @@ class LimineInstaller:
                     logger.error(f"mkinitcpio stdout: {result.stdout}")
                 return False
 
-            # Verify initramfs was created
-            initramfs_path = self.mount_point / "boot" / "initramfs-linux.img"
+            initramfs_path = self.mount_point / "boot" / "initramfs-shedos-kernel.img"
             if not initramfs_path.exists():
                 logger.error(f"initramfs not created at {initramfs_path}")
                 return False
@@ -292,7 +290,11 @@ class LimineInstaller:
                 logger.error(f"Failed to create EFI root: {e}")
                 return False
 
-        files_to_copy = ["vmlinuz-linux", "initramfs-linux.img", "initramfs-linux-fallback.img"]
+        files_to_copy = [
+            "vmlinuz-shedos-kernel",
+            "initramfs-shedos-kernel.img",
+            "initramfs-shedos-kernel-fallback.img",
+        ]
         success = True
 
         for filename in files_to_copy:
