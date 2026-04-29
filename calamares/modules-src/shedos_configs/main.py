@@ -425,9 +425,27 @@ def run():
                         f"{chown_res.returncode}: {chown_res.stderr}"
                     )
             nm_landed = sorted(p.name for p in target_connections.iterdir())
-            libcalamares.utils.debug(
+            libcalamares.utils.warning(
                 f"shedos_configs: NM target listing: {nm_landed}"
             )
+            # Inspect copied .nmconnection files for psk presence so we
+            # can tell post-install whether secrets actually transferred.
+            for nm_file in sorted(target_connections.iterdir()):
+                if not nm_file.is_file() or not nm_file.name.endswith(".nmconnection"):
+                    continue
+                try:
+                    contents = nm_file.read_text()
+                except OSError:
+                    continue
+                has_psk = "\npsk=" in ("\n" + contents)
+                psk_flags = "0"
+                for line in contents.splitlines():
+                    if line.startswith("psk-flags="):
+                        psk_flags = line.split("=", 1)[1].strip()
+                        break
+                libcalamares.utils.warning(
+                    f"shedos_configs: NM {nm_file.name}: psk={'present' if has_psk else 'MISSING'}, psk-flags={psk_flags}"
+                )
 
         # iwd profiles. The waybar network icon launches impala (an iwd
         # TUI), so most users connect via iwd — whose profiles live in
@@ -444,7 +462,7 @@ def run():
         else:
             try:
                 iwd_sources = sorted(p.name for p in source_iwd.iterdir())
-                libcalamares.utils.debug(
+                libcalamares.utils.warning(
                     f"shedos_configs: iwd source listing: {iwd_sources}"
                 )
             except PermissionError as pe:
@@ -465,7 +483,7 @@ def run():
                     f"shedos_configs: Cannot read /var/lib/iwd (need root): {pe}"
                 )
             if iwd_count > 0:
-                libcalamares.utils.debug(
+                libcalamares.utils.warning(
                     f"shedos_configs: Copied {iwd_count} iwd profiles"
                 )
                 os.chmod(target_iwd, 0o700)
@@ -481,9 +499,22 @@ def run():
                     )
             if target_iwd.exists():
                 iwd_landed = sorted(p.name for p in target_iwd.iterdir())
-                libcalamares.utils.debug(
+                libcalamares.utils.warning(
                     f"shedos_configs: iwd target listing: {iwd_landed}"
                 )
+                # Inspect copied iwd psk files for actual secret content
+                # so we know post-install whether the password is in there.
+                for psk_file in sorted(target_iwd.iterdir()):
+                    if not psk_file.is_file() or psk_file.suffix not in (".psk", ".open", ".8021x"):
+                        continue
+                    try:
+                        contents = psk_file.read_text()
+                    except OSError:
+                        continue
+                    has_secret = "PreSharedKey=" in contents or "Passphrase=" in contents
+                    libcalamares.utils.warning(
+                        f"shedos_configs: iwd {psk_file.name}: secret={'present' if has_secret else 'MISSING'}"
+                    )
 
         # Loud warning when both sources are empty — the user will have
         # to re-enter wifi on first boot, and this is the symptom we want
