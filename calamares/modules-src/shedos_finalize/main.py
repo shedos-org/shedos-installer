@@ -446,7 +446,7 @@ def run():
 
     _run(_chroot(root_mount_point,
                  ["su", "-", username, "-c", "xdg-user-dirs-update"]))
-    for user_dir in ("projects", "work"):
+    for user_dir in ("Projects", "Work"):
         _run(_chroot(root_mount_point,
                      ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
 
