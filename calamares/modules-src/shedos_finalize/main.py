@@ -36,7 +36,6 @@ SERVICES = [
     "postgresql.service",
     "docker.service",
 
-    "cronie.service",
     "thermald.service",
 ]
 
