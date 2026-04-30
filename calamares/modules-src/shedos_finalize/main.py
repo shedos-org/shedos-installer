@@ -450,6 +450,22 @@ def run():
         _run(_chroot(root_mount_point,
                      ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
 
+    # /etc/shedos/login-user — shedos-greeter reads this to know which
+    # account to authenticate. Falls back to /etc/passwd auto-detect if
+    # the file is missing, but writing it here makes the choice explicit
+    # and survives package upgrades that might add another uid >= 1000.
+    login_user_file = root_mount / "etc" / "shedos" / "login-user"
+    try:
+        login_user_file.parent.mkdir(parents=True, exist_ok=True)
+        login_user_file.write_text(f"{username}\n")
+        libcalamares.utils.debug(
+            f"shedos_finalize: wrote login user '{username}' to {login_user_file}"
+        )
+    except Exception as e:
+        libcalamares.utils.warning(
+            f"shedos_finalize: writing {login_user_file}: {e}"
+        )
+
     # greetd autologin: strip the [initial_session] block left over from
     # the live ISO (which autologs the live `shedos` user); if Calamares
     # set autologinUser, write a new [initial_session] for that user.
