@@ -28,7 +28,7 @@ SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
     "iwd.service",
-    "sddm.service",
+    "greetd.service",
     "fstrim.timer",
 
     # shedos-pg-initdb.service is enabled by shedos-system's .install hook
@@ -450,48 +450,31 @@ def run():
         _run(_chroot(root_mount_point,
                      ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
 
-    sddm_dir = root_mount / "etc" / "sddm.conf.d"
+    # greetd autologin: strip the [initial_session] block left over from
+    # the live ISO (which autologs the live `shedos` user); if Calamares
+    # set autologinUser, write a new [initial_session] for that user.
+    greetd_config = root_mount / "etc" / "greetd" / "config.toml"
     try:
-        sddm_dir.mkdir(parents=True, exist_ok=True)
-        (sddm_dir / "theme.conf").write_text(
-            "[Theme]\nCurrent=catppuccin-mocha-mauve\n"
-        )
+        if greetd_config.exists():
+            import tomlkit
+            doc = tomlkit.parse(greetd_config.read_text())
+            if "initial_session" in doc:
+                del doc["initial_session"]
 
-        live_autologin = sddm_dir / "live-session-autologin.conf"
-        if live_autologin.exists():
-            live_autologin.unlink()
-
-        # Session= is the filename STEM of a .desktop in
-        # /usr/share/wayland-sessions/. For Hyprland that is `hyprland`
-        # (from hyprland.desktop). Do NOT change to `start-hyprland` —
-        # that's the wrapper binary the .desktop invokes via Exec=, not
-        # the session name. A wrong value makes SDDM silently fall back
-        # to the login form.
-        (sddm_dir / "autologin.conf").write_text(
-            f"[Autologin]\nUser={username}\nSession=hyprland\nRelogin=false\n"
-        )
-        libcalamares.utils.debug(
-            f"shedos_finalize: wrote SDDM autologin for {username}"
-        )
-
-        # Replace 'Current=breeze' anywhere the displaymanager module wrote it.
-        for conf_file in sddm_dir.glob("*.conf"):
-            if conf_file.name == "theme.conf":
-                continue
-            try:
-                content = conf_file.read_text()
-                if "Current=breeze" in content:
-                    conf_file.write_text(
-                        content.replace("Current=breeze",
-                                        "Current=catppuccin-mocha-mauve")
-                    )
-            except Exception as e:
-                libcalamares.utils.warning(
-                    f"shedos_finalize: checking {conf_file}: {e}"
+            autologin_user = libcalamares.globalstorage.value("autologinUser")
+            if autologin_user:
+                initial = tomlkit.table()
+                initial["command"] = "Hyprland"
+                initial["user"] = autologin_user
+                doc["initial_session"] = initial
+                libcalamares.utils.debug(
+                    f"shedos_finalize: greetd autologin set for {autologin_user}"
                 )
+
+            greetd_config.write_text(tomlkit.dumps(doc))
     except Exception as e:
         libcalamares.utils.warning(
-            f"shedos_finalize: SDDM theme/autologin setup: {e}"
+            f"shedos_finalize: greetd autologin setup: {e}"
         )
 
     os.system("sync")
