@@ -28,6 +28,7 @@ SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
     "iwd.service",
+    "seatd.service",
     "greetd.service",
     "fstrim.timer",
 
