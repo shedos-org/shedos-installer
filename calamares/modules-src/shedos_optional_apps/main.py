@@ -3,9 +3,9 @@
 
 """Install user-picked optional apps after pacstrap.
 
-pacman handles official + [shedos] sources; yay-in-chroot (as the new
-user) handles AUR proprietaries that aren't republished. Failures are
-logged as warnings but never abort the install — user can re-run via
+All picker items are AUR proprietaries (not republished to [shedos]),
+so install via yay-in-chroot as the new user. Failures are logged as
+warnings but never abort the install — user can re-run via
 `shedman install <pkg>` post-boot.
 """
 
@@ -13,11 +13,6 @@ import shlex
 import subprocess
 
 import libcalamares
-
-
-# Packages sourced from pacman repos (official + [shedos]).
-# Everything else is treated as AUR and installed via yay.
-PACMAN_SOURCED = {"code"}
 
 
 def pretty_name():
@@ -36,27 +31,8 @@ def run():
         return None
 
     libcalamares.utils.debug(f"shedos_optional_apps: selected {selected}")
-
-    pacman_pkgs = [p for p in selected if p in PACMAN_SOURCED]
-    aur_pkgs = [p for p in selected if p not in PACMAN_SOURCED]
-
-    if pacman_pkgs:
-        _run_pacman(root, pacman_pkgs)
-    if aur_pkgs:
-        _run_yay(root, aur_pkgs)
-
+    _run_yay(root, selected)
     return None
-
-
-def _run_pacman(root, pkgs):
-    cmd = ["arch-chroot", root, "pacman", "-S", "--needed", "--noconfirm", *pkgs]
-    libcalamares.utils.debug(f"shedos_optional_apps: pacman: {shlex.join(cmd)}")
-    r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if r.returncode != 0:
-        libcalamares.utils.warning(
-            f"shedos_optional_apps: pacman returned {r.returncode}; "
-            f"stderr: {(r.stderr or '').strip()[-1000:]}"
-        )
 
 
 def _run_yay(root, pkgs):
