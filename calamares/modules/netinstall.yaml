@@ -1,20 +1,30 @@
-# shedOS Complete Installation
-# Developer-focused OS with all packages included
+# Optional-apps picker for the Calamares show: sequence. User checks
+# any subset (default: all four). Each leaf is a single proprietary
+# AUR app the user can opt out of without affecting the base install.
 ---
-- name: "shedOS Complete"
-  description: "Full shedOS installation with everything: Hyprland desktop, complete development environment (Docker, K8s, languages), multimedia tools, office suite, and all productivity apps. Everything a developer needs."
-  critical: true
+- name: "Optional Development Tools"
+  description: "Pick the apps you'd like installed. You can change selection later with shedman install."
   hidden: false
   selected: true
-  expanded: true
-  immutable: true
+  critical: false
   packages:
-    # This list is installed from the live ISO (all packages already downloaded)
-    # Base system is always installed
-    # Desktop environment: Hyprland + Waybar + all tools
-    # Development: All languages, tools, containers, databases
-    # Multimedia: OBS, GIMP, Inkscape, VLC, Kdenlive
-    # Office: LibreOffice, Thunderbird
-    # Communication: Discord, Slack, Telegram
-    # Virtualization: virt-manager, QEMU, libvirt
-    # All packages from archiso/packages.x86_64 are included
+    - name: "Google Chrome"
+      description: "Web browser with Widevine streaming support."
+      packages:
+        - google-chrome
+      selected: true
+    - name: "Postman"
+      description: "API client for HTTP/REST development."
+      packages:
+        - postman-bin
+      selected: true
+    - name: "Claude Code"
+      description: "Anthropic's agentic coding tool for the terminal."
+      packages:
+        - claude-code-bin
+      selected: true
+    - name: "JetBrains Toolbox"
+      description: "Manages PyCharm, IntelliJ, WebStorm, and other JetBrains IDEs."
+      packages:
+        - jetbrains-toolbox
+      selected: true

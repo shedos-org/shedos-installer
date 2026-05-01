@@ -24,8 +24,7 @@ def run():
     if not root:
         return ("No rootMountPoint", "")
 
-    raw = libcalamares.globalstorage.value("packagechooser_apps") or ""
-    selected = [p.strip() for p in raw.split(",") if p.strip()]
+    selected = _read_netinstall_selections()
     if not selected:
         libcalamares.utils.debug("shedos_optional_apps: nothing selected")
         return None
@@ -33,6 +32,30 @@ def run():
     libcalamares.utils.debug(f"shedos_optional_apps: selected {selected}")
     _run_yay(root, selected)
     return None
+
+
+# Optional apps the netinstall screen offers. Filter the netinstall
+# globalstorage payload down to this set so we never accidentally
+# pacman-install something pacstrap already handled via shedos-meta,
+# nor a non-AUR package via the AUR helper path below.
+_ALLOWED_OPTIONAL = frozenset({
+    "google-chrome",
+    "postman-bin",
+    "claude-code-bin",
+    "jetbrains-toolbox",
+})
+
+
+def _read_netinstall_selections():
+    gs = libcalamares.globalstorage
+    selected = []
+    for pkg in gs.value("packages") or []:
+        if isinstance(pkg, str):
+            selected.append(pkg)
+    for op in gs.value("packageOperations") or []:
+        if isinstance(op, dict) and op.get("operation") == "install":
+            selected.extend(op.get("packages") or [])
+    return [p for p in selected if p in _ALLOWED_OPTIONAL]
 
 
 def _run_yay(root, pkgs):
