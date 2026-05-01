@@ -319,19 +319,6 @@ def run():
         libcalamares.utils.warning("shedos_finalize: No username found")
         return None
 
-    for file_path in (
-        root_mount / "etc" / "profile.d" / "shedos-live.sh",
-        root_mount / "etc" / "motd",
-    ):
-        try:
-            if file_path.exists():
-                file_path.unlink()
-                libcalamares.utils.debug(f"shedos_finalize: Removed {file_path}")
-        except Exception as e:
-            libcalamares.utils.warning(
-                f"shedos_finalize: Could not remove {file_path}: {e}"
-            )
-
     issue_content = "\nshedOS\nKernel: \\r on \\m\nTTY: \\l\n\n"
     try:
         (root_mount / "etc" / "issue").write_text(issue_content)
@@ -356,19 +343,6 @@ def run():
     r = _run(_chroot(root_mount_point, ["usermod", "-aG", "docker", username]))
     if r.returncode != 0:
         _log_cmd_failure(f"usermod -aG docker {username}", r)
-
-    for kcmd in (["pacman-key", "--init"],
-                 ["pacman-key", "--populate", "archlinux"]):
-        r = _run(_chroot(root_mount_point, kcmd))
-        if r.returncode != 0:
-            _log_cmd_failure(" ".join(kcmd), r)
-
-    r = _run(_chroot(root_mount_point, ["pacman", "-Sy", "--noconfirm"]))
-    if r.returncode != 0:
-        libcalamares.utils.debug(
-            "shedos_finalize: pacman -Sy didn't succeed (probably offline); "
-            "not fatal"
-        )
 
     r = _run(_chroot(root_mount_point,
                      ["pacman", "-S", "--noconfirm", "--needed",
