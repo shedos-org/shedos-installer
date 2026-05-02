@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shedos-installer"
-version = "0.2.0"
-description = "Calamares Installer Configuration for ShedOS Linux"
+version = "0.3.0"
+description = "Shared Python library backing shedOS's Calamares custom modules"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "GPL-3.0-or-later"}
@@ -36,14 +36,11 @@ dev = [
     "pytest-cov>=4.0.0",
 ]
 
-[project.scripts]
-shedos-installer = "shedos_installer.main:main"
-
 [tool.setuptools.packages.find]
 where = ["."]
 
 [tool.setuptools.package-data]
-shedos_installer = ["packages/*.txt"]
+shedos_installer = []
 
 [tool.ruff]
 line-length = 100

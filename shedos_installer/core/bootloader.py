@@ -253,11 +253,22 @@ class LimineInstaller:
                     logger.error(f"mkinitcpio stdout: {result.stdout}")
                 return False
 
-            initramfs_path = self.mount_point / "boot" / "initramfs-shedos-kernel.img"
-            if not initramfs_path.exists():
-                logger.error(f"initramfs not created at {initramfs_path}")
+            # Limine's recovery menu loads the fallback variant; mkinitcpio -P
+            # can exit 0 with one preset silently failing (e.g. disk full),
+            # so check both files exist before declaring success.
+            required_initramfs = [
+                "initramfs-shedos-kernel.img",
+                "initramfs-shedos-kernel-fallback.img",
+            ]
+            missing = [
+                f for f in required_initramfs
+                if not (self.mount_point / "boot" / f).exists()
+            ]
+            if missing:
+                logger.error(f"initramfs files not created: {missing}")
                 return False
-            logger.info(f"initramfs created at {initramfs_path}")
+            for f in required_initramfs:
+                logger.info(f"initramfs created at {self.mount_point / 'boot' / f}")
 
             # Copy the freshly regenerated kernel + initramfs to the ESP.
             # Must run AFTER mkinitcpio so the ESP picks up the variant

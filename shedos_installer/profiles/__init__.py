@@ -1,1 +1,0 @@
-"""Installation profiles for ShedOS."""
