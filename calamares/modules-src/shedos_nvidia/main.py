@@ -43,6 +43,9 @@ def run():
             line = line.strip()
             if line and not line.startswith("#"):
                 nvidia_packages.append(line)
+        libcalamares.utils.debug(
+            f"Read {len(nvidia_packages)} NVIDIA packages from {nvidia_pkg_file}"
+        )
     else:
         nvidia_packages = [
             "nvidia-open-dkms",
@@ -51,6 +54,9 @@ def run():
             "egl-wayland",
             "libva-nvidia-driver",
         ]
+        libcalamares.utils.warning(
+            f"NVIDIA package list missing at {nvidia_pkg_file}; using fallback"
+        )
 
     if not nvidia_packages:
         libcalamares.utils.warning("No NVIDIA packages found")
@@ -65,8 +71,22 @@ def run():
     )
 
     if not result.success:
-        # Non-fatal: user can `pacman -S` the failed packages post-install.
-        libcalamares.utils.warning(f"NVIDIA package installation had issues: {result.stderr}")
+        # Non-fatal — the installed system still boots via modesetting.
+        # Persist a sentinel so first-boot tooling can prompt the user
+        # to retry instead of silently shipping a broken NVIDIA stack.
+        libcalamares.utils.warning(
+            "NVIDIA driver install FAILED — manual repair needed:\n"
+            f"  Re-run on first boot: pacman -S {' '.join(nvidia_packages)}\n"
+            f"  Stderr tail: {(result.stderr or '')[-500:]}"
+        )
+        try:
+            sentinel = Path(root_mount_point) / "etc/shedos/nvidia-install-failed"
+            sentinel.parent.mkdir(parents=True, exist_ok=True)
+            sentinel.write_text("\n".join(nvidia_packages) + "\n")
+        except Exception as exc:
+            libcalamares.utils.warning(
+                f"Could not write NVIDIA failure sentinel: {exc}"
+            )
 
     nvidia_services = [
         "nvidia-suspend.service",
