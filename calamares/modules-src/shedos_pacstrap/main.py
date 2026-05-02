@@ -49,6 +49,14 @@ IGNORE_PROVIDERS = [
     "jdk25-openjdk",
     "qt6-multimedia-gstreamer",
     "pipewire-media-session",
+    "gnu-free-fonts",
+    "ttf-bitstream-vera",
+    "ttf-croscore",
+    "ttf-droid",
+    "ttf-ibm-plex",
+    "ttf-input",
+    "ttf-input-nerd",
+    "ttf-roboto",
 ]
 
 
