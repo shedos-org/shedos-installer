@@ -105,9 +105,10 @@ def run():
     if libcalamares.globalstorage.value("shedos_install_nvidia"):
         packages.extend(NVIDIA_PACKAGES)
 
-    # -c uses the host package cache; --ignore= passes through to pacman.
+    # --needed: unpackfs ran before us and already installed most of the
+    # closure; without --needed pacstrap would redundantly reinstall it.
     ignore = ",".join(IGNORE_PROVIDERS)
-    cmd = ["pacstrap", "-c", root, *packages, f"--ignore={ignore}"]
+    cmd = ["pacstrap", "-c", root, *packages, f"--ignore={ignore}", "--needed"]
     libcalamares.utils.debug(f"shedos_pacstrap: {' '.join(cmd)}")
 
     os.makedirs(os.path.dirname(PACSTRAP_LOG), exist_ok=True)

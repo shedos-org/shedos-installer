@@ -48,9 +48,8 @@ def _load_module(name: str, path: Path):
 
 
 def test_shedos_pacstrap_argv_includes_ignore(fake_libcalamares, monkeypatch, tmp_path):
-    """pacstrap argv must carry --ignore=… so pacman doesn't auto-roll
-    the alphabetical-default virtual provider (jack2 over pipewire-jack,
-    etc.), which would conflict with shedos-meta's explicit deps."""
+    """pacstrap argv must carry --ignore= so pacman doesn't auto-roll the
+    alphabetical-default virtual provider (jack2 vs pipewire-jack)."""
     fake_libcalamares.globalstorage.value.side_effect = lambda key: {
         "rootMountPoint": str(tmp_path),
         "shedos_install_nvidia": False,
@@ -69,18 +68,16 @@ def test_shedos_pacstrap_argv_includes_ignore(fake_libcalamares, monkeypatch, tm
         MODULES_SRC / "shedos_pacstrap/main.py",
     )
     monkeypatch.setattr(mod, "_stream_pacstrap", fake_stream)
-    # PACSTRAP_LOG defaults to /var/log/calamares/pacstrap.log; redirect
-    # to tmp so we don't need root to write.
     monkeypatch.setattr(mod, "PACSTRAP_LOG", str(tmp_path / "pacstrap.log"))
 
     assert mod.run() is None
     cmd = captured["cmd"]
-    # Sanity: pacstrap, the target root, base set, and --ignore present.
     assert cmd[0] == "pacstrap"
     assert cmd[1] == "-c"
     assert cmd[2] == str(tmp_path)
     assert "base" in cmd
     assert "shedos-meta" in cmd
+    assert "--needed" in cmd
     ignore_args = [a for a in cmd if a.startswith("--ignore=")]
     assert len(ignore_args) == 1, cmd
     ignored = ignore_args[0].split("=", 1)[1].split(",")
@@ -122,9 +119,8 @@ def test_shedos_pacstrap_nvidia_extends_base(fake_libcalamares, monkeypatch, tmp
 def test_shedos_pacstrap_failure_returns_head_and_tail(
     fake_libcalamares, monkeypatch, tmp_path,
 ):
-    """On non-zero rc, the user-visible error must include both the
-    head and the tail of captured output. Resolver conflicts surface
-    at the tail; download/config errors surface at the head."""
+    """On non-zero rc, the error must include both head and tail of output:
+    resolver conflicts surface at the tail, download errors at the head."""
     fake_libcalamares.globalstorage.value.side_effect = lambda key: {
         "rootMountPoint": str(tmp_path),
         "shedos_install_nvidia": False,
@@ -150,64 +146,81 @@ def test_shedos_pacstrap_failure_returns_head_and_tail(
     assert "late-line-2" in body
 
 
-# ─── shedos_optional_apps ───────────────────────────────────────────
+# ─── shedos_local_apps ──────────────────────────────────────────────
 
 
-def _is_yay_cmd(cmd):
-    return len(cmd) >= 8 and cmd[5] == "bash" and "yay" in cmd[7]
+def _make_pkg(dirpath: Path, name: str) -> Path:
+    dirpath.mkdir(parents=True, exist_ok=True)
+    f = dirpath / f"{name}-1.0-1-x86_64.pkg.tar.zst"
+    f.write_bytes(b"fake-zst")
+    return f
 
 
-def test_optional_apps_default_install_set(fake_libcalamares, monkeypatch, tmp_path):
-    """All four proprietary apps must be passed to yay unconditionally."""
+def test_local_apps_pacman_U_uses_in_target_paths(
+    fake_libcalamares, monkeypatch, tmp_path,
+):
+    """Bundled .pkg.tar.zst must be staged into the target's pacman cache
+    and pacman -U'd from the in-target path: the live ISO mount isn't
+    visible to processes running under arch-chroot."""
+    aur_dir = tmp_path / "shedos-payload" / "aur"
+    for name in ("google-chrome", "postman-bin",
+                 "claude-code-bin", "jetbrains-toolbox"):
+        _make_pkg(aur_dir, name)
+
+    target_root = tmp_path / "target"
     fake_libcalamares.globalstorage.value.side_effect = lambda key: {
-        "rootMountPoint": str(tmp_path),
-        "username": "shedrack",
+        "rootMountPoint": str(target_root),
     }.get(key)
 
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd, **_):
-        if _is_yay_cmd(cmd):
-            captured["yay"] = list(cmd)
+        captured["cmd"] = list(cmd)
         return MagicMock(returncode=0, stdout="", stderr="")
 
     mod = _load_module(
-        "shedos_optional_apps_main",
-        MODULES_SRC / "shedos_optional_apps/main.py",
+        "shedos_local_apps_main",
+        MODULES_SRC / "shedos_local_apps/main.py",
     )
+    monkeypatch.setattr(mod, "HOST_AUR_DIR", str(aur_dir))
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     assert mod.run() is None
-    cmd = captured["yay"]
+    cmd = captured["cmd"]
     assert cmd[0] == "arch-chroot"
-    assert cmd[1] == str(tmp_path)
-    assert cmd[2:5] == ["sudo", "-u", "shedrack"]
-    assert cmd[5] == "bash"
-    assert cmd[6] == "-c"
-    yay_cmd = cmd[7]
-    for pkg in mod.DEFAULT_INSTALL:
-        assert pkg in yay_cmd, f"{pkg} missing from yay invocation"
-    assert set(mod.DEFAULT_INSTALL) == {
-        "google-chrome",
-        "postman-bin",
-        "claude-code-bin",
-        "jetbrains-toolbox",
-    }
+    assert cmd[1] == str(target_root)
+    assert cmd[2] == "pacman"
+    assert cmd[3] == "-U"
+    assert "--noconfirm" in cmd
+    assert "--needed" in cmd
+    pkg_args = [a for a in cmd if a.startswith("/var/cache/pacman/pkg/")]
+    assert len(pkg_args) == 4, cmd
+    for pkg in ("google-chrome", "postman-bin",
+                "claude-code-bin", "jetbrains-toolbox"):
+        assert any(pkg in a for a in pkg_args), f"{pkg} missing from argv"
+    cache = target_root / "var/cache/pacman/pkg"
+    assert cache.is_dir()
+    staged = sorted(p.name for p in cache.glob("*.pkg.tar.zst"))
+    assert len(staged) == 4
 
 
-def test_optional_apps_no_username_skips(fake_libcalamares, monkeypatch, tmp_path):
-    """If the users module hasn't committed a username yet, warn and
-    skip rather than running yay with no `-u <user>`."""
+def test_local_apps_missing_bundle_dir_is_nonfatal(
+    fake_libcalamares, monkeypatch, tmp_path,
+):
+    """Missing /shedos-payload/aur/ must warn and return None so the
+    rest of the install completes."""
+    aur_dir = tmp_path / "missing-aur"  # never created
+    target_root = tmp_path / "target"
     fake_libcalamares.globalstorage.value.side_effect = lambda key: {
-        "rootMountPoint": str(tmp_path),
-        "username": None,
+        "rootMountPoint": str(target_root),
     }.get(key)
 
     fake_run = MagicMock()
     mod = _load_module(
-        "shedos_optional_apps_main_nouser",
-        MODULES_SRC / "shedos_optional_apps/main.py",
+        "shedos_local_apps_main_nopkgs",
+        MODULES_SRC / "shedos_local_apps/main.py",
     )
+    monkeypatch.setattr(mod, "HOST_AUR_DIR", str(aur_dir))
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     assert mod.run() is None
@@ -215,56 +228,27 @@ def test_optional_apps_no_username_skips(fake_libcalamares, monkeypatch, tmp_pat
     fake_libcalamares.utils.warning.assert_called()
 
 
-def test_optional_apps_sudo_probe_failure_skips_yay(
+def test_local_apps_pacman_U_failure_is_nonfatal(
     fake_libcalamares, monkeypatch, tmp_path,
 ):
-    """If the user can't sudo without a password (broken NOPASSWD),
-    skip yay and warn. Running yay anyway would fail mid-build with a
-    less actionable error."""
+    """pacman -U failures (sig mismatch, missing dep) must not abort
+    Calamares — bootloader install and finalize still need to run."""
+    aur_dir = tmp_path / "shedos-payload" / "aur"
+    _make_pkg(aur_dir, "google-chrome")
+
+    target_root = tmp_path / "target"
     fake_libcalamares.globalstorage.value.side_effect = lambda key: {
-        "rootMountPoint": str(tmp_path),
-        "username": "shedrack",
-    }.get(key)
-
-    yay_called = False
-
-    def fake_run(cmd, **_):
-        nonlocal yay_called
-        if _is_yay_cmd(cmd):
-            yay_called = True
-            return MagicMock(returncode=0, stdout="", stderr="")
-        return MagicMock(returncode=1, stdout="", stderr="sudo: a password is required")
-
-    mod = _load_module(
-        "shedos_optional_apps_main_probefail",
-        MODULES_SRC / "shedos_optional_apps/main.py",
-    )
-    monkeypatch.setattr(mod.subprocess, "run", fake_run)
-
-    assert mod.run() is None
-    assert not yay_called
-    fake_libcalamares.utils.warning.assert_called()
-
-
-def test_optional_apps_yay_failure_is_nonfatal(
-    fake_libcalamares, monkeypatch, tmp_path,
-):
-    """yay can fail (offline install, AUR HTTP 500, build error). The
-    install must complete anyway; the user can retry via shedman."""
-    fake_libcalamares.globalstorage.value.side_effect = lambda key: {
-        "rootMountPoint": str(tmp_path),
-        "username": "shedrack",
+        "rootMountPoint": str(target_root),
     }.get(key)
 
     def fake_run(cmd, **_):
-        if _is_yay_cmd(cmd):
-            return MagicMock(returncode=1, stdout="", stderr="some yay error")
-        return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="signature is unknown trust")
 
     mod = _load_module(
-        "shedos_optional_apps_main_failnowarn",
-        MODULES_SRC / "shedos_optional_apps/main.py",
+        "shedos_local_apps_main_pacfail",
+        MODULES_SRC / "shedos_local_apps/main.py",
     )
+    monkeypatch.setattr(mod, "HOST_AUR_DIR", str(aur_dir))
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
     assert mod.run() is None

@@ -1,4 +1,4 @@
 type: job
-name: shedos_optional_apps
+name: shedos_local_apps
 interface: python
 script: main.py
