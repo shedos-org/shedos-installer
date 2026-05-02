@@ -1,0 +1,4 @@
+type: job
+name: shedos_mirrors
+interface: python
+script: main.py
