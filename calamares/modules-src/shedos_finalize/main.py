@@ -419,6 +419,17 @@ def run():
             f"system to diagnose."
         )
 
+    # libseat group membership — Hyprland and any other libseat client
+    # need this to acquire seat0. Calamares' users module SHOULD have
+    # added it via defaultGroups, but past releases shipped without; this
+    # is the belt-and-braces guarantee. Idempotent.
+    if username:
+        _run(_chroot(root_mount_point, ["groupadd", "-r", "-f", "seat"]))
+        r = _run(_chroot(root_mount_point,
+                         ["usermod", "-aG", "seat", username]))
+        if r.returncode != 0:
+            _log_cmd_failure(f"usermod -aG seat {username}", r)
+
     _run(_chroot(root_mount_point,
                  ["su", "-", username, "-c", "xdg-user-dirs-update"]))
     for user_dir in ("Projects", "Work"):
