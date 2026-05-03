@@ -1,4 +1,0 @@
-type: job
-name: shedos_pacstrap
-interface: python
-script: main.py

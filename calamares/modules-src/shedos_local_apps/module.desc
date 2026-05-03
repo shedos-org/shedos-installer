@@ -1,4 +1,0 @@
-type: job
-name: shedos_local_apps
-interface: python
-script: main.py

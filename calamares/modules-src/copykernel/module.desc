@@ -1,0 +1,5 @@
+---
+type: "job"
+name: "copykernel"
+interface: "python"
+script: "main.py"
