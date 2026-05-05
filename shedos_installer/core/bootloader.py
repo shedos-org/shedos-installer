@@ -270,13 +270,14 @@ class LimineInstaller:
             for f in required_initramfs:
                 logger.info(f"initramfs created at {self.mount_point / 'boot' / f}")
 
-            # Copy the freshly regenerated kernel + initramfs to the ESP.
-            # Must run AFTER mkinitcpio so the ESP picks up the variant
-            # with our final HOOKS (LUKS + Plymouth).
-            logger.info("Copying freshly generated kernels to ESP...")
-            if not self._copy_kernels_to_esp():
-                logger.error("Failed to copy regenerated kernels to ESP")
-                return False
+            if self.is_uefi:
+                # Copy the freshly regenerated kernel + initramfs to the ESP.
+                # Must run AFTER mkinitcpio so the ESP picks up the variant
+                # with our final HOOKS (LUKS + Plymouth).
+                logger.info("Copying freshly generated kernels to ESP...")
+                if not self._copy_kernels_to_esp():
+                    logger.error("Failed to copy regenerated kernels to ESP")
+                    return False
 
             return True
         except Exception as e:

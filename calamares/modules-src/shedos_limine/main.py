@@ -36,31 +36,34 @@ def run():
     if not partitions:
         return ("No partitions found", "Partition information not available")
 
-    # CRITICAL: Calamares' mount module mounts root + subvolumes but not
-    # the ESP. Without mounting it here, LimineInstaller would write
-    # directories into BTRFS at /boot/efi instead of the ESP partition,
-    # and the install would silently fail to boot.
-    esp_device = None
-    for partition in partitions:
-        if partition.get("mountPoint") == "/boot/efi":
-            esp_device = partition.get("device")
-            break
+    uefi = is_uefi()
+    if uefi:
+        # Calamares' mount module mounts root + subvolumes but not the ESP.
+        # Without mounting it here, LimineInstaller writes directories
+        # into BTRFS at /boot/efi instead of the ESP partition.
+        esp_device = None
+        for partition in partitions:
+            if partition.get("mountPoint") == "/boot/efi":
+                esp_device = partition.get("device")
+                break
 
-    if not esp_device:
-        return ("ESP not found", "No partition configured for /boot/efi")
+        if not esp_device:
+            return ("ESP not found", "No partition configured for /boot/efi")
 
-    esp_path = os.path.join(root_mount_point, "boot", "efi")
-    os.makedirs(esp_path, exist_ok=True)
+        esp_path = os.path.join(root_mount_point, "boot", "efi")
+        os.makedirs(esp_path, exist_ok=True)
 
-    if not os.path.ismount(esp_path):
-        libcalamares.utils.debug(f"Mounting ESP {esp_device} at {esp_path}")
-        try:
-            subprocess.run(["mount", "-t", "vfat", esp_device, esp_path], check=True)
-            libcalamares.utils.debug("ESP mounted successfully")
-        except subprocess.CalledProcessError as e:
-            return (f"Failed to mount ESP: {e}", f"Could not mount {esp_device} at {esp_path}")
+        if not os.path.ismount(esp_path):
+            libcalamares.utils.debug(f"Mounting ESP {esp_device} at {esp_path}")
+            try:
+                subprocess.run(["mount", "-t", "vfat", esp_device, esp_path], check=True)
+                libcalamares.utils.debug("ESP mounted successfully")
+            except subprocess.CalledProcessError as e:
+                return (f"Failed to mount ESP: {e}", f"Could not mount {esp_device} at {esp_path}")
+        else:
+            libcalamares.utils.debug(f"ESP already mounted at {esp_path}")
     else:
-        libcalamares.utils.debug(f"ESP already mounted at {esp_path}")
+        libcalamares.utils.debug("BIOS boot detected — skipping ESP detection/mount")
 
     root_uuid = None
     luks_uuid = None
@@ -91,7 +94,7 @@ def run():
     libcalamares.utils.debug(f"Root UUID: {root_uuid}")
     libcalamares.utils.debug(f"Disk device: {disk_device}")
     libcalamares.utils.debug(f"LUKS UUID: {luks_uuid}")
-    libcalamares.utils.debug(f"UEFI mode: {is_uefi()}")
+    libcalamares.utils.debug(f"UEFI mode: {uefi}")
 
     gpus = get_gpus()
     has_nvidia = any(gpu.is_nvidia for gpu in gpus)
