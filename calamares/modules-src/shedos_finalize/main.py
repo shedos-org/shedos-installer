@@ -18,12 +18,13 @@ from pathlib import Path
 import libcalamares
 
 
-# Services to enable on the installed system.
+# Services this module enables on the installed system.
 #
-# Deliberately NOT enabled:
-#   - auto-cpufreq.service, tlp.service — compete with power-profiles-daemon
-#   - ufw.service                       — firewall off by default
-#   - sshd.service                      — security-sensitive, user opts in
+# Other ShedOS services (tlp, ananicy-cpp, snapper-timeline,
+# snapper-cleanup, systemd-oomd) are owned by shedos-system's
+# post_install hook, not this module. ufw stays off by default; the
+# firewall is reconciled via [network.firewall] in system.toml. sshd
+# is left off because it's security-sensitive — user opts in.
 SERVICES = [
     "NetworkManager.service",
     "bluetooth.service",
