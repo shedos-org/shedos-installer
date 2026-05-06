@@ -12,6 +12,7 @@ logged as a Calamares *warning* (not debug) so it shows up in
 
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -296,6 +297,235 @@ def _manual_enable(root_mount, service):
     return True
 
 
+def _persist_wifi_profiles(root_mount_point, root_mount):
+    """Copy NetworkManager + iwd WiFi profiles from the live ISO onto
+    the installed system, ship the NM-through-iwd routing drop-in,
+    and mirror the psk-flags=0 default for new connections joined
+    post-install.
+
+    Calamares' networkcfg module can be flaky, and live-session
+    secrets are often only in the keyring (not on disk), so the
+    active connection's secrets are forced to file via nmcli first.
+
+    Failures are logged; never raises.
+    """
+    libcalamares.utils.debug("shedos_finalize: Persisting NetworkManager connections...")
+    try:
+        try:
+            output = subprocess.check_output(
+                ["nmcli", "-t", "-f", "UUID,TYPE,DEVICE",
+                 "connection", "show", "--active"],
+                text=True,
+            ).strip()
+
+            for line in output.split('\n'):
+                if not line:
+                    continue
+                parts = line.split(':')
+                if len(parts) >= 2 and parts[1] == "802-11-wireless":
+                    uuid = parts[0]
+                    libcalamares.utils.debug(f"shedos_finalize: Found active WiFi UUID: {uuid}")
+
+                    # psk-flags=0   → store secret on disk, not keyring
+                    # permissions="" → available to all users
+                    # save           → flush to disk immediately
+                    subprocess.run(
+                        ["nmcli", "connection", "modify", uuid,
+                         "802-11-wireless-security.psk-flags", "0"],
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["nmcli", "connection", "modify", uuid,
+                         "connection.permissions", ""],
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["nmcli", "connection", "save", uuid],
+                        check=False,
+                    )
+                    libcalamares.utils.debug(f"shedos_finalize: Forced persistence for {uuid}")
+        except Exception as nm_e:
+            libcalamares.utils.warning(f"shedos_finalize: Failed to prepare NM connections: {nm_e}")
+
+        source_connections = Path("/etc/NetworkManager/system-connections")
+        target_connections = root_mount / "etc/NetworkManager/system-connections"
+
+        nm_count = 0
+        if not source_connections.exists() or not source_connections.is_dir():
+            libcalamares.utils.warning(
+                f"shedos_finalize: {source_connections} missing on live ISO; "
+                f"no NetworkManager profiles to persist"
+            )
+        else:
+            nm_sources = sorted(p.name for p in source_connections.iterdir())
+            libcalamares.utils.debug(
+                f"shedos_finalize: NM source listing: {nm_sources}"
+            )
+            if not nm_sources:
+                libcalamares.utils.warning(
+                    "shedos_finalize: /etc/NetworkManager/system-connections is "
+                    "empty — user may have joined wifi via iwd only (that's OK, "
+                    "iwd profiles are copied separately below)"
+                )
+            target_connections.mkdir(parents=True, exist_ok=True)
+            for conn_file in source_connections.iterdir():
+                if conn_file.is_file() and not conn_file.name.endswith(".example"):
+                    dest = target_connections / conn_file.name
+                    shutil.copy2(conn_file, dest)
+                    os.chmod(dest, 0o600)
+                    nm_count += 1
+            if nm_count > 0:
+                libcalamares.utils.debug(
+                    f"shedos_finalize: Copied {nm_count} NM connection profiles"
+                )
+                chown_res = subprocess.run(
+                    ["chown", "-R", "root:root", str(target_connections)],
+                    capture_output=True,
+                    text=True,
+                )
+                if chown_res.returncode != 0:
+                    libcalamares.utils.warning(
+                        f"shedos_finalize: chown of NM target returned "
+                        f"{chown_res.returncode}: {chown_res.stderr}"
+                    )
+            nm_landed = sorted(p.name for p in target_connections.iterdir())
+            libcalamares.utils.warning(
+                f"shedos_finalize: NM target listing: {nm_landed}"
+            )
+            # Inspect copied .nmconnection files for psk presence so we
+            # can tell post-install whether secrets actually transferred.
+            for nm_file in sorted(target_connections.iterdir()):
+                if not nm_file.is_file() or not nm_file.name.endswith(".nmconnection"):
+                    continue
+                try:
+                    contents = nm_file.read_text()
+                except OSError:
+                    continue
+                has_psk = "\npsk=" in ("\n" + contents)
+                psk_flags = "0"
+                for line in contents.splitlines():
+                    if line.startswith("psk-flags="):
+                        psk_flags = line.split("=", 1)[1].strip()
+                        break
+                libcalamares.utils.warning(
+                    f"shedos_finalize: NM {nm_file.name}: psk={'present' if has_psk else 'MISSING'}, psk-flags={psk_flags}"
+                )
+
+        # iwd profiles. The waybar network icon launches impala (an iwd
+        # TUI), so most users connect via iwd — whose profiles live in
+        # /var/lib/iwd/*.psk, NOT in NetworkManager's dir. Without this
+        # copy, wifi credentials entered during install are lost on reboot.
+        source_iwd = Path("/var/lib/iwd")
+        target_iwd = root_mount / "var/lib/iwd"
+        iwd_count = 0
+        if not source_iwd.exists() or not source_iwd.is_dir():
+            libcalamares.utils.warning(
+                f"shedos_finalize: {source_iwd} missing on live ISO; "
+                f"no iwd profiles to persist"
+            )
+        else:
+            try:
+                iwd_sources = sorted(p.name for p in source_iwd.iterdir())
+                libcalamares.utils.warning(
+                    f"shedos_finalize: iwd source listing: {iwd_sources}"
+                )
+            except PermissionError as pe:
+                libcalamares.utils.warning(
+                    f"shedos_finalize: Cannot read /var/lib/iwd (need root): {pe}"
+                )
+                iwd_sources = []
+            target_iwd.mkdir(parents=True, exist_ok=True)
+            try:
+                for psk_file in source_iwd.iterdir():
+                    if psk_file.is_file() and psk_file.suffix in (".psk", ".open", ".8021x"):
+                        dest = target_iwd / psk_file.name
+                        shutil.copy2(psk_file, dest)
+                        os.chmod(dest, 0o600)
+                        iwd_count += 1
+            except PermissionError as pe:
+                libcalamares.utils.warning(
+                    f"shedos_finalize: Cannot read /var/lib/iwd (need root): {pe}"
+                )
+            if iwd_count > 0:
+                libcalamares.utils.warning(
+                    f"shedos_finalize: Copied {iwd_count} iwd profiles"
+                )
+                os.chmod(target_iwd, 0o700)
+                iwd_chown = subprocess.run(
+                    ["chown", "-R", "root:root", str(target_iwd)],
+                    capture_output=True,
+                    text=True,
+                )
+                if iwd_chown.returncode != 0:
+                    libcalamares.utils.warning(
+                        f"shedos_finalize: chown of iwd target returned "
+                        f"{iwd_chown.returncode}: {iwd_chown.stderr}"
+                    )
+            if target_iwd.exists():
+                iwd_landed = sorted(p.name for p in target_iwd.iterdir())
+                libcalamares.utils.warning(
+                    f"shedos_finalize: iwd target listing: {iwd_landed}"
+                )
+                # Inspect copied iwd psk files for actual secret content
+                # so we know post-install whether the password is in there.
+                for psk_file in sorted(target_iwd.iterdir()):
+                    if not psk_file.is_file() or psk_file.suffix not in (".psk", ".open", ".8021x"):
+                        continue
+                    try:
+                        contents = psk_file.read_text()
+                    except OSError:
+                        continue
+                    has_secret = "PreSharedKey=" in contents or "Passphrase=" in contents
+                    libcalamares.utils.warning(
+                        f"shedos_finalize: iwd {psk_file.name}: secret={'present' if has_secret else 'MISSING'}"
+                    )
+
+        # Loud warning when both sources are empty — the user will have
+        # to re-enter wifi on first boot, and this is the symptom we want
+        # to catch loud rather than silently.
+        if nm_count == 0 and iwd_count == 0:
+            libcalamares.utils.warning(
+                "shedos_finalize: WiFi profiles NOT persisted — user will have "
+                "to re-enter wifi password on first boot. Both "
+                "/etc/NetworkManager/system-connections and /var/lib/iwd were "
+                "empty or unreadable on the live ISO."
+            )
+
+        # Route NetworkManager's WiFi through iwd in the installed
+        # system. Both services are enabled and without this config they
+        # fight over the WiFi device. With iwd as the backend, NM
+        # presents iwd's stored profiles as its own on boot.
+        nm_conf_d = root_mount / "etc/NetworkManager/conf.d"
+        nm_conf_d.mkdir(parents=True, exist_ok=True)
+        (nm_conf_d / "wifi_backend.conf").write_text(
+            "# ShedOS: route NetworkManager WiFi through iwd (see /var/lib/iwd/)\n"
+            "[device]\n"
+            "wifi.backend=iwd\n"
+        )
+        libcalamares.utils.debug("shedos_finalize: Wrote NM wifi_backend.conf (iwd)")
+
+        # Ship the live-ISO psk-flags=0 NM drop-in to the installed
+        # system too. Without it, any wifi joined for the FIRST time
+        # AFTER install reverts to agent-owned secrets (stored in the
+        # user's login keyring only) and won't auto-connect on cold boot.
+        nm_defaults_src = Path(
+            "/etc/NetworkManager/conf.d/20-connection-defaults.conf"
+        )
+        nm_defaults_dst = nm_conf_d / "20-connection-defaults.conf"
+        if nm_defaults_src.exists():
+            shutil.copy2(nm_defaults_src, nm_defaults_dst)
+            libcalamares.utils.debug(
+                f"shedos_finalize: Copied {nm_defaults_src.name} to target"
+            )
+        else:
+            libcalamares.utils.warning(
+                f"shedos_finalize: {nm_defaults_src} missing on live ISO; "
+                f"new wifi connections on the installed system won't persist"
+            )
+    except Exception as e:
+        libcalamares.utils.warning(f"shedos_finalize: Failed to persist wifi profiles: {e}")
+
+
 def pretty_name():
     return "Finalizing ShedOS installation"
 
@@ -320,7 +550,7 @@ def run():
         libcalamares.utils.warning("shedos_finalize: No username found")
         return None
 
-    issue_content = "\nshedOS\nKernel: \\r on \\m\nTTY: \\l\n\n"
+    issue_content = "\nShedOS\nKernel: \\r on \\m\nTTY: \\l\n\n"
     try:
         (root_mount / "etc" / "issue").write_text(issue_content)
         libcalamares.utils.debug("shedos_finalize: Updated /etc/issue")
@@ -419,6 +649,8 @@ def run():
             f"{', '.join(bad)}. Run `shedos-check-services` on the installed "
             f"system to diagnose."
         )
+
+    _persist_wifi_profiles(root_mount_point, root_mount)
 
     # libseat group membership — Hyprland and any other libseat client
     # need this to acquire seat0. Calamares' users module SHOULD have
