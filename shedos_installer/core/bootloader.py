@@ -120,12 +120,25 @@ class LimineInstaller:
     def _build_cmdline(self) -> str:
         """Compose the install-time kernel command line.
 
-        Only baseline tokens go here — root device, fstype, NVIDIA / LUKS
-        knobs that can't be derived after the fact. User-tunable tokens
-        (nowatchdog, mitigations=*, …) live in /etc/shedos/system.toml's
-        [kernel.cmdline].append and are merged in later by `shedman apply`.
-        Including them here would freeze them into the apply_core baseline
-        and make them un-removable.
+        Two classes of token belong here:
+
+        1. Hardware/topology essentials that can't be derived after the
+           fact — root=, rootflags=, rootfstype=, cryptdevice=,
+           nvidia_drm.modeset=1.
+        2. UX-critical, never-tunable tokens that must take effect on
+           the very first kernel handoff (before `shedman apply` ever
+           runs) — quiet, splash, loglevel=3, rd.udev.log_level=3,
+           console=tty1, fbcon=nodefer,map:99. Together these suppress
+           the framebuffer console flash between Plymouth and Hyprland.
+
+        User-tunable tokens (nowatchdog, mitigations=*,
+        split_lock_detect=off, nvme_core.default_ps_max_latency_us=*,
+        etc.) are NOT included here. They live in
+        /etc/shedos/system.toml's [kernel.cmdline].append and are
+        merged in by `shedman apply`. Including them here would freeze
+        them into the apply_core baseline (which seeds itself from the
+        live cmdline on first apply) and make them un-removable via
+        system.toml edits.
         """
         parts: list[str] = []
         if self.luks_uuid:
@@ -136,7 +149,17 @@ class LimineInstaller:
             parts.append(f"root=/dev/mapper/{mapper_name}")
         else:
             parts.append(f"root=UUID={self.root_uuid}")
-        parts.extend(["rootflags=subvol=@", "rootfstype=btrfs", "rw", "quiet", "splash"])
+        parts.extend([
+            "rootflags=subvol=@",
+            "rootfstype=btrfs",
+            "rw",
+            "quiet",
+            "splash",
+            "loglevel=3",
+            "rd.udev.log_level=3",
+            "console=tty1",
+            "fbcon=nodefer,map:99",
+        ])
         if self.nvidia:
             parts.append("nvidia_drm.modeset=1")
         return " ".join(parts)

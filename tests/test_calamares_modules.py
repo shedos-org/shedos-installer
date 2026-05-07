@@ -261,6 +261,31 @@ def test_limine_returns_error_when_root_uuid_missing(
     assert "root" in title.lower()
 
 
+def test_limine_install_cmdline_includes_ux_baseline_tokens():
+    """Install-time cmdline must carry the four UX-critical tokens so
+    a fresh install has no framebuffer console flash on first boot —
+    they cannot wait for the user's first `shedman apply`."""
+    sys.path.insert(0, str(REPO_ROOT / "installer"))
+    try:
+        from shedos_installer.core.bootloader import LimineInstaller
+    finally:
+        sys.path.pop(0)
+    inst = LimineInstaller(
+        root_uuid="11111111-1111-1111-1111-111111111111",
+    )
+    tokens = inst._build_cmdline().split()
+    for required in (
+        "loglevel=3",
+        "rd.udev.log_level=3",
+        "console=tty1",
+        "fbcon=nodefer,map:99",
+    ):
+        assert required in tokens, (
+            f"{required!r} missing from install-time cmdline; a fresh "
+            f"install will show a console flash on first boot."
+        )
+
+
 # ─── shedos_nvidia ──────────────────────────────────────────────────
 
 
