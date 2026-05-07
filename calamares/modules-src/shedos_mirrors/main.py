@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Refresh /etc/pacman.d/mirrorlist before pacstrap.
+"""Refresh /etc/pacman.d/mirrorlist mid-install.
 
 The boot-time shedos-mirrorlist.service runs once when the live ISO
 comes up. If the user sat at Calamares' welcome screen for a while
-(or the live env was suspended), the mirrorlist may be stale — slow
-mirrors or ones that have rotated their content. Re-run reflector
-with the same flags right before pacstrap reaches for them.
+(or the live env was suspended), the mirrorlist may be stale.
+
+Both this module and the systemd unit exec /usr/lib/shedos/
+refresh-mirrorlist.sh, the single source of truth for ShedOS's
+reflector flag set. Tune the flags there.
 
 Non-fatal on failure. The boot-time list is at worst stale, not
 absent.
@@ -17,15 +19,7 @@ import subprocess
 import libcalamares
 
 
-REFLECTOR_ARGS = [
-    "/usr/bin/reflector",
-    "--save", "/etc/pacman.d/mirrorlist",
-    "--sort", "rate",
-    "--latest", "20",
-    "--protocol", "https",
-    "--age", "12",
-    "--threads", "5",
-]
+REFLECTOR_SCRIPT = "/usr/lib/shedos/refresh-mirrorlist.sh"
 
 
 def pretty_name():
@@ -33,11 +27,9 @@ def pretty_name():
 
 
 def run():
-    libcalamares.utils.debug(
-        "shedos_mirrors: " + " ".join(REFLECTOR_ARGS)
-    )
+    libcalamares.utils.debug(f"shedos_mirrors: exec {REFLECTOR_SCRIPT}")
     r = subprocess.run(
-        REFLECTOR_ARGS,
+        [REFLECTOR_SCRIPT],
         capture_output=True,
         text=True,
         timeout=120,

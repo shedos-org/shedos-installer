@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shedos-installer"
 version = "0.3.0"
-description = "Shared Python library backing shedOS's Calamares custom modules"
+description = "Shared Python library backing ShedOS's Calamares custom modules"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "GPL-3.0-or-later"}

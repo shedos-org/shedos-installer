@@ -1,22 +1,22 @@
-# shedOS Branding Configuration for Calamares
+# ShedOS Branding Configuration for Calamares
 # https://github.com/calamares/calamares/wiki/Deploy-Configuration#branding
 
 componentName: shedos
 
 strings:
-    productName: "shedOS"
-    shortProductName: "shedOS"
-    version: "0.1.0"
-    shortVersion: "0.1.0"
-    versionedName: "shedOS 0.1.0"
-    shortVersionedName: "shedOS 0.1.0"
-    bootloaderEntryName: "shedOS"
+    productName: "ShedOS"
+    shortProductName: "ShedOS"
+    version: "DEVELOPMENT"
+    shortVersion: "DEVELOPMENT"
+    versionedName: "ShedOS DEVELOPMENT"
+    shortVersionedName: "ShedOS DEVELOPMENT"
+    bootloaderEntryName: "ShedOS"
     productUrl: "https://github.com/theshedman/shedos"
     supportUrl: "https://github.com/theshedman/shedos/issues"
     knownIssuesUrl: "https://github.com/theshedman/shedos/issues"
     releaseNotesUrl: "https://github.com/theshedman/shedos/releases"
     donateUrl: ""
-    welcome: "Welcome to shedOS installer.<br/>Please connect to a power source if your battery is low.<br/>You may optionally connect to WiFi."
+    welcome: "Welcome to ShedOS installer.<br/>Please connect to a power source if your battery is low.<br/>You may optionally connect to WiFi."
 
 images:
     productLogo: "shedos-logo.png"
