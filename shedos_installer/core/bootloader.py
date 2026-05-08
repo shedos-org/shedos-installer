@@ -128,8 +128,18 @@ class LimineInstaller:
         2. UX-critical, never-tunable tokens that must take effect on
            the very first kernel handoff (before `shedman apply` ever
            runs) — quiet, splash, loglevel=3, rd.udev.log_level=3,
-           console=tty1, fbcon=nodefer,map:99. Together these suppress
-           the framebuffer console flash between Plymouth and Hyprland.
+           fbcon=nodefer,map:99. Together these suppress the
+           framebuffer console flash between Plymouth and Hyprland.
+
+           console=tty1 was previously included here but had to be
+           removed: any explicit `console=` value populates
+           /sys/class/tty/console/active, and Plymouth's device-
+           manager interprets that as a serial console and force-
+           falls-back to the text-only `details` plugin for the entire
+           session — including shutdown, where the graphical brand
+           never gets to render. Letting the kernel default (tty0)
+           stand keeps Plymouth in graphical mode; the other three
+           tokens still suppress the visible boot/login console text.
 
         User-tunable tokens (nowatchdog, mitigations=*,
         split_lock_detect=off, nvme_core.default_ps_max_latency_us=*,
@@ -157,7 +167,6 @@ class LimineInstaller:
             "splash",
             "loglevel=3",
             "rd.udev.log_level=3",
-            "console=tty1",
             "fbcon=nodefer,map:99",
         ])
         if self.nvidia:

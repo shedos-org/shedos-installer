@@ -277,13 +277,19 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
     for required in (
         "loglevel=3",
         "rd.udev.log_level=3",
-        "console=tty1",
         "fbcon=nodefer,map:99",
     ):
         assert required in tokens, (
             f"{required!r} missing from install-time cmdline; a fresh "
             f"install will show a console flash on first boot."
         )
+    # console=tty1 must NOT be present: it triggers Plymouth's serial-
+    # console heuristic, force-falling-back to the text-only details
+    # plugin and breaking the graphical shutdown brand.
+    assert "console=tty1" not in tokens, (
+        "console=tty1 must not be in install-time cmdline — it disables "
+        "Plymouth's graphical splash at shutdown."
+    )
 
 
 # ─── shedos_nvidia ──────────────────────────────────────────────────
