@@ -526,6 +526,61 @@ def _persist_wifi_profiles(root_mount_point, root_mount):
         libcalamares.utils.warning(f"shedos_finalize: Failed to persist wifi profiles: {e}")
 
 
+def _fix_locale_conf_encoding(root_mount):
+    """Append `.UTF-8` to bare locale names in /etc/locale.conf.
+
+    Calamares' locale module sometimes writes /etc/locale.conf with
+    bare locale names (`LANG=en_NG`, `LC_TIME=en_NG`) instead of the
+    encoding-qualified form (`LANG=en_NG.UTF-8`). glibc indexes locales
+    by their fully qualified name — `setlocale("en_NG")` fails with
+    "cannot change locale" and bash prints the warning to stderr on
+    every interactive login. With greetd's session worker running bash
+    on tty1, those warnings reach tty1's vcs buffer and get painted by
+    fbcon during DRM-master gaps at compositor handoffs.
+
+    Idempotent: lines that already have a `.UTF-8` (or any other dot-
+    separated encoding) suffix are left alone.
+    """
+    locale_conf = root_mount / "etc" / "locale.conf"
+    if not locale_conf.exists():
+        return
+    try:
+        original = locale_conf.read_text()
+    except OSError as exc:
+        libcalamares.utils.warning(
+            f"shedos_finalize: cannot read {locale_conf}: {exc}"
+        )
+        return
+
+    fixed_lines = []
+    changed = False
+    for line in original.splitlines():
+        stripped = line.strip()
+        if "=" in stripped and not stripped.startswith("#"):
+            key, _, value = stripped.partition("=")
+            value = value.strip().strip('"').strip("'")
+            # Only fix bare locale names — i.e. no dot-separated
+            # encoding suffix and not a special value like "C" or "POSIX".
+            if value and "." not in value and value not in ("C", "POSIX"):
+                fixed_lines.append(f"{key.strip()}={value}.UTF-8")
+                changed = True
+                continue
+        fixed_lines.append(line)
+
+    if not changed:
+        return
+
+    try:
+        locale_conf.write_text("\n".join(fixed_lines) + "\n")
+        libcalamares.utils.debug(
+            f"shedos_finalize: appended .UTF-8 to bare locale names in {locale_conf}"
+        )
+    except OSError as exc:
+        libcalamares.utils.warning(
+            f"shedos_finalize: cannot write {locale_conf}: {exc}"
+        )
+
+
 def pretty_name():
     return "Finalizing ShedOS installation"
 
@@ -558,6 +613,8 @@ def run():
         libcalamares.utils.warning(
             f"shedos_finalize: Could not update /etc/issue: {e}"
         )
+
+    _fix_locale_conf_encoding(root_mount)
 
     r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/zsh", username]))
     if r.returncode != 0:
