@@ -22,7 +22,6 @@ BRANDING_DIR = Path("/opt/shedos-installer/branding")
 ALL_CONFIGS = [
     ("hyprland", ".config/hypr"),
     ("hypridle", ".config/hypr"),
-    ("hyprlock", ".config/hypr"),
 
     ("waybar", ".config/waybar"),
     ("walker", ".config/walker"),
@@ -234,27 +233,6 @@ def run():
     hyprland_conf = user_home / ".config" / "hypr" / "hyprland.conf"
     if hyprland_conf.exists():
         libcalamares.utils.debug(f"shedos_configs: Verified hyprland.conf exists: {hyprland_conf}")
-
-        # Add `exec-once = hyprlock` so the lock screen appears at login.
-        # Marker-based insertion is brittle but cheap; if /etc/skel's
-        # hyprland.conf is restructured to drop the "Startup Applications"
-        # marker, this falls through silently.
-        try:
-            content = hyprland_conf.read_text()
-            if "exec-once = hyprlock" not in content:
-                marker = "# Startup Applications"
-                if marker in content:
-                    lines = content.split("\n")
-                    for i, line in enumerate(lines):
-                        if marker in line and i + 2 < len(lines):
-                            insert_index = i + 2
-                            lines.insert(insert_index, "exec-once = hyprlock  # Login screen on startup")
-                            content = "\n".join(lines)
-                            break
-                    hyprland_conf.write_text(content)
-                    libcalamares.utils.debug("shedos_configs: Added hyprlock to startup for login screen")
-        except Exception as e:
-            libcalamares.utils.warning(f"shedos_configs: Could not add hyprlock to startup: {e}")
     else:
         libcalamares.utils.warning(f"shedos_configs: WARNING: hyprland.conf NOT found after deployment!")
         errors.append("hyprland.conf not found after deployment")
