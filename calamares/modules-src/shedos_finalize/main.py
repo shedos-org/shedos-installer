@@ -13,6 +13,7 @@ logged as a Calamares *warning* (not debug) so it shows up in
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -59,6 +60,52 @@ def _log_cmd_failure(label, result):
 
 def _chroot(root_mount_point, cmd):
     return ["arch-chroot", root_mount_point, *cmd]
+
+
+def _kill_chroot_stragglers(root_mount_point):
+    """SIGKILL any process whose root is anchored at the chroot mount.
+
+    arch-chroot doesn't pid-namespace its children, so a daemon spawned
+    inside the chroot (postgres workers after a partial pg_ctl stop,
+    gpg-agent / dirmngr after pacman keyring work, anything else that
+    daemonises before its arch-chroot wrapper exits) is visible in the
+    host's /proc with /proc/<pid>/root pointing at the chroot. Those
+    stragglers pin bind-mounts and make Calamares' upstream umount
+    module fail with "device 'shm' could not be unmounted" at the very
+    end of install.
+
+    This sweep walks /proc once, matches by realpath of the root
+    symlink, and SIGKILLs the matches. Calamares itself runs with
+    root '/' so it is never a match; the explicit own-pid skip is
+    defence in depth.
+    """
+    try:
+        real_root = os.path.realpath(root_mount_point)
+    except OSError:
+        return []
+    own = os.getpid()
+    killed = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == own:
+            continue
+        try:
+            link = os.readlink(f"/proc/{entry}/root")
+        except OSError:
+            continue
+        try:
+            if os.path.realpath(link) != real_root:
+                continue
+        except OSError:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed.append(pid)
+        except (OSError, ProcessLookupError):
+            pass
+    return killed
 
 
 def _pg_quote_ident(name):
@@ -171,6 +218,21 @@ if [ "$start_rc" -eq 0 ]; then
     runuser -u postgres -- pg_ctl -D "$PGDATA" -m fast stop
     stop_rc=$?
     echo "stop_rc=$stop_rc"
+
+    # pg_ctl returns once the postmaster pidfile clears, but a slow
+    # background worker can still hold POSIX shm at /dev/shm/PostgreSQL.*.
+    # Calamares' umount module then trips on the bind-mounted /dev/shm.
+    # Wait up to 2.5s for a clean exit, SIGKILL any straggler.
+    echo '=== drain postgres workers ==='
+    for _ in 1 2 3 4 5; do
+        pgrep -u postgres -x postgres >/dev/null 2>&1 || break
+        sleep 0.5
+    done
+    if pgrep -u postgres -x postgres >/dev/null 2>&1; then
+        echo 'postgres workers still alive after pg_ctl stop; SIGKILL'
+        pkill -9 -u postgres -x postgres || true
+    fi
+    rm -f /dev/shm/PostgreSQL.* 2>/dev/null || true
 fi
 
 echo '=== server log ==='
@@ -770,5 +832,16 @@ def run():
         )
 
     os.system("sync")
+
+    # Final sweep: SIGKILL anything still alive inside the chroot before
+    # Calamares' umount module runs. shedos_finalize is the last shedos
+    # module in settings.conf before umount, so this is the right place.
+    killed = _kill_chroot_stragglers(root_mount_point)
+    if killed:
+        libcalamares.utils.warning(
+            f"shedos_finalize: killed {len(killed)} chroot straggler(s) "
+            f"before umount: {killed}"
+        )
+
     libcalamares.utils.debug("shedos_finalize: Installation finalized")
     return None
