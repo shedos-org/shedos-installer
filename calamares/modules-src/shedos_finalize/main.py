@@ -643,6 +643,80 @@ def _fix_locale_conf_encoding(root_mount):
         )
 
 
+def _verify_locale_generated(root_mount_point, root_mount):
+    """Confirm the user's LANG was actually compiled into locale-archive.
+
+    Calamares' localecfg module already runs locale-gen on the target as
+    part of its install job. This is the belt-and-suspenders check: read
+    /etc/locale.conf on the target, normalize the LANG value to the
+    archive form (en_US.UTF-8 → en_US.utf8), and verify it's listed by
+    `localedef --list-archive` in the chroot. If missing, rerun
+    locale-gen once and re-verify. If still missing, warn — the install
+    completes, but the user sees a Calamares warning they can act on.
+    """
+    locale_conf = root_mount / "etc" / "locale.conf"
+    if not locale_conf.exists():
+        libcalamares.utils.warning(
+            "shedos_finalize: /etc/locale.conf missing on target; "
+            "skipping locale-archive verification"
+        )
+        return
+
+    try:
+        text = locale_conf.read_text()
+    except OSError as exc:
+        libcalamares.utils.warning(
+            f"shedos_finalize: cannot read {locale_conf}: {exc}"
+        )
+        return
+
+    lang = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("LANG="):
+            lang = stripped[5:].strip().strip('"').strip("'")
+            break
+
+    if not lang or lang in ("C", "POSIX") or lang.startswith("C."):
+        # Built-in glibc locales; no archive entry to verify.
+        return
+
+    if "." in lang:
+        name, _, enc = lang.partition(".")
+        enc = enc.lower().replace("-", "")
+        normalized = f"{name}.{enc}"
+    else:
+        normalized = lang
+
+    def _archive_has(target):
+        r = _run(_chroot(root_mount_point, ["localedef", "--list-archive"]))
+        if r.returncode != 0:
+            return False
+        return target in (r.stdout or "").splitlines()
+
+    if _archive_has(normalized):
+        libcalamares.utils.debug(
+            f"shedos_finalize: locale-archive includes {normalized}"
+        )
+        return
+
+    libcalamares.utils.warning(
+        f"shedos_finalize: {normalized} missing from locale-archive; "
+        f"running locale-gen on target"
+    )
+    r = _run(_chroot(root_mount_point, ["locale-gen"]))
+    if r.returncode != 0:
+        _log_cmd_failure("locale-gen", r)
+
+    if not _archive_has(normalized):
+        libcalamares.utils.warning(
+            f"shedos_finalize: locale {lang} could not be generated on "
+            f"the target. Applications that call setlocale($LANG) may "
+            f"fall back to C. To fix after first boot, run "
+            f"`sudo locale-gen`."
+        )
+
+
 def pretty_name():
     return "Finalizing ShedOS installation"
 
@@ -677,6 +751,7 @@ def run():
         )
 
     _fix_locale_conf_encoding(root_mount)
+    _verify_locale_generated(root_mount_point, root_mount)
 
     r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/zsh", username]))
     if r.returncode != 0:
