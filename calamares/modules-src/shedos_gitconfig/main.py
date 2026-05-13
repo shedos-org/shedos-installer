@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Seed the new user's ~/.gitconfig with ShedOS defaults. user.email is
-left for the welcome script — we only have user.name (Calamares fullname)
-to work with at install time."""
+"""Seed the new user's ~/.gitconfig with ShedOS defaults. user.name comes
+from the Calamares users page (Full Name); user.email is filled in only
+if the user entered it on the same page, in the optional developer
+setup group. When they also ticked the SSH checkbox, an ed25519 key is
+generated as the new user."""
 
 import os
+import shlex
+
 import libcalamares
-from libcalamares.utils import check_target_env_call
+from libcalamares.utils import check_target_env_call, target_env_call
+
 
 def pretty_name():
     return "Configuring git for developer workflow"
+
 
 def run():
     gs = libcalamares.globalstorage
 
     username = gs.value("username")
     fullname = gs.value("fullName")
+    email = gs.value("devinfoEmail") or ""
+    want_ssh = bool(gs.value("devinfoSsh"))
 
     if not username:
         libcalamares.utils.warning("No username found in global storage")
@@ -35,13 +43,15 @@ def run():
     user_home = os.path.join(root_mount, "home", username)
     gitconfig_path = os.path.join(user_home, ".gitconfig")
 
+    user_block = f"    name = {fullname}\n"
+    if email:
+        user_block += f"    email = {email}\n"
+
     gitconfig_content = f"""# ShedOS Git Configuration
 # Generated during installation
-# Set your email: git config --global user.email "your@email.com"
 
 [user]
-    name = {fullname}
-
+{user_block}
 [init]
     defaultBranch = main
 
@@ -79,10 +89,28 @@ def run():
 
         check_target_env_call(['chown', f'{username}:{username}', f'/home/{username}/.gitconfig'])
 
-        libcalamares.utils.debug("Git configuration complete")
-
     except Exception as e:
         libcalamares.utils.warning(f"Failed to configure git: {str(e)}")
         return None
 
+    if want_ssh and email:
+        # `su -` rebuilds the environment as the user so the resulting
+        # files end up owned by them; no separate chown needed. Empty
+        # passphrase so the oh-my-zsh ssh-agent plugin can load the
+        # key non-interactively on first shell login.
+        ssh_cmd = (
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+            f"ssh-keygen -t ed25519 -N '' -C {shlex.quote(email)} "
+            "-f ~/.ssh/id_ed25519"
+        )
+        rc = target_env_call(['su', '-', username, '-c', ssh_cmd])
+        if rc != 0:
+            libcalamares.utils.warning(
+                f"ssh-keygen for {username} exited {rc}; "
+                "the user can run ssh-keygen manually after first login"
+            )
+        else:
+            libcalamares.utils.debug(f"SSH ed25519 key generated for {username}")
+
+    libcalamares.utils.debug("Git configuration complete")
     return None

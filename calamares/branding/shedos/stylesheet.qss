@@ -6,3 +6,16 @@
     min-height: 140px;
     margin-bottom: 20px;
 }
+
+/* About + Debug buttons in the sidebar footer default to near-black,
+ * which is invisible against our dark (#1e1e2e) sidebar background.
+ * Match the sidebar text colour and brighten on hover. */
+#aboutButton, #debugButton {
+    color: #cdd6f4;
+    background: transparent;
+    border: none;
+}
+
+#aboutButton:hover, #debugButton:hover {
+    color: #89b4fa;
+}
