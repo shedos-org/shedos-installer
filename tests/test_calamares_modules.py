@@ -277,7 +277,7 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
     for required in (
         "loglevel=3",
         "rd.udev.log_level=3",
-        "fbcon=nodefer,map:99",
+        "fbcon=nodefer",
     ):
         assert required in tokens, (
             f"{required!r} missing from install-time cmdline; a fresh "
@@ -289,6 +289,15 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
     assert "console=tty1" not in tokens, (
         "console=tty1 must not be in install-time cmdline — it disables "
         "Plymouth's graphical splash at shutdown."
+    )
+    # fbcon=nodefer,map:99 must NOT be present: map:99 permanently
+    # unmaps the FB console from every VT, silently breaking
+    # Ctrl+Alt+F<N> TTY switching post-boot. The other flash
+    # mitigations (clear-vt-text.sh, quiet/loglevel=3/journal
+    # redirects) cover flash suppression without that side effect.
+    assert "fbcon=nodefer,map:99" not in tokens, (
+        "fbcon=nodefer,map:99 must not be in install-time cmdline — "
+        "map:99 breaks VT switching."
     )
 
 

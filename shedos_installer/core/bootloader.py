@@ -128,8 +128,10 @@ class LimineInstaller:
         2. UX-critical, never-tunable tokens that must take effect on
            the very first kernel handoff (before `shedman apply` ever
            runs) — quiet, splash, loglevel=3, rd.udev.log_level=3,
-           fbcon=nodefer,map:99. Together these suppress the
-           framebuffer console flash between Plymouth and Hyprland.
+           fbcon=nodefer. Together with clear-vt-text.sh (which wipes
+           the VT text buffer Before=greetd.service) and the various
+           stdio→journal redirects, these suppress the framebuffer
+           console flash between Plymouth and Hyprland.
 
            console=tty1 was previously included here but had to be
            removed: any explicit `console=` value populates
@@ -138,8 +140,19 @@ class LimineInstaller:
            falls-back to the text-only `details` plugin for the entire
            session — including shutdown, where the graphical brand
            never gets to render. Letting the kernel default (tty0)
-           stand keeps Plymouth in graphical mode; the other three
-           tokens still suppress the visible boot/login console text.
+           stand keeps Plymouth in graphical mode; the other tokens
+           still suppress the visible boot/login console text.
+
+           fbcon=nodefer used to be paired with map:99 — the pair
+           kept fbcon "active but mapped to a nonexistent fbdev" so
+           every DRM-master gap painted black. But map:99 also
+           permanently unmapped the FB console from every VT, which
+           silently broke Ctrl+Alt+F<N> TTY switching post-boot. The
+           other flash-suppression mitigations (clear-vt-text.sh,
+           quiet, loglevel=3, rd.udev.log_level=3, journal
+           redirects) cover the visible-flash case on their own,
+           verified empirically on dev + test hardware. nodefer
+           alone keeps fbcon ready without disabling VT mapping.
 
         User-tunable tokens (nowatchdog, mitigations=*,
         split_lock_detect=off, nvme_core.default_ps_max_latency_us=*,
@@ -167,7 +180,7 @@ class LimineInstaller:
             "splash",
             "loglevel=3",
             "rd.udev.log_level=3",
-            "fbcon=nodefer,map:99",
+            "fbcon=nodefer",
         ])
         if self.nvidia:
             parts.append("nvidia_drm.modeset=1")
