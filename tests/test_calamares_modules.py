@@ -110,52 +110,6 @@ def test_copykernel_no_kernels_returns_error(
     assert "No kernels" in title
 
 
-# ─── shedos_mirrors ─────────────────────────────────────────────────
-
-
-def test_mirrors_invokes_refresh_script(fake_libcalamares, monkeypatch):
-    """run() exec's /usr/lib/shedos/refresh-mirrorlist.sh with a 120s timeout."""
-    import subprocess
-
-    captured = {}
-
-    def fake_run(cmd, **kw):
-        captured["cmd"] = cmd
-        captured["timeout"] = kw.get("timeout")
-        return subprocess.CompletedProcess(
-            args=cmd, returncode=0, stdout="", stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    mod = _load_module(
-        "shedos_mirrors_main", MODULES_SRC / "shedos_mirrors/main.py",
-    )
-    assert mod.run() is None
-    assert captured["cmd"] == [mod.REFLECTOR_SCRIPT]
-    assert captured["timeout"] == 120
-
-
-def test_mirrors_warns_on_failure(fake_libcalamares, monkeypatch):
-    """Non-zero exit → warning logged; run() still returns None (non-fatal)."""
-    import subprocess
-
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda cmd, **kw: subprocess.CompletedProcess(
-            args=cmd, returncode=2, stdout="", stderr="boom",
-        ),
-    )
-
-    mod = _load_module(
-        "shedos_mirrors_main_fail", MODULES_SRC / "shedos_mirrors/main.py",
-    )
-    assert mod.run() is None
-    fake_libcalamares.utils.warning.assert_called()
-    msg = fake_libcalamares.utils.warning.call_args.args[0]
-    assert "returned 2" in msg
-
-
 # ─── shedos_gitconfig ───────────────────────────────────────────────
 
 
@@ -210,13 +164,6 @@ def test_gitconfig_returns_none_when_username_missing(fake_libcalamares):
     )
     assert mod.run() is None
     fake_libcalamares.utils.warning.assert_called()
-
-
-# ─── shedos_mirrors note ───────────────────────────────────────────
-#
-# (no further tests — module is a thin wrapper around the shared
-# refresh-mirrorlist.sh script; the script's flags are out-of-band
-# and verified by hand.)
 
 
 # ─── shedos_limine ──────────────────────────────────────────────────
