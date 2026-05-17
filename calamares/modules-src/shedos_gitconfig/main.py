@@ -8,7 +8,6 @@ setup group. When they also ticked the SSH checkbox, an ed25519 key is
 generated as the new user."""
 
 import os
-import shlex
 
 import libcalamares
 from libcalamares.utils import check_target_env_call, target_env_call
@@ -94,22 +93,23 @@ def run():
         return None
 
     if want_ssh and email:
-        # `su -` rebuilds the environment as the user so the resulting
-        # files end up owned by them; no separate chown needed. Empty
-        # passphrase so the oh-my-zsh ssh-agent plugin can load the
-        # key non-interactively on first shell login.
-        ssh_cmd = (
-            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-            f"ssh-keygen -t ed25519 -N '' -C {shlex.quote(email)} "
-            "-f ~/.ssh/id_ed25519"
-        )
-        rc = target_env_call(['su', '-', username, '-c', ssh_cmd])
+        # ssh-keygen directly, not via `su - $user`: a login shell
+        # would spawn oh-my-zsh's ssh-agent daemon, which pins the
+        # chroot's /dev/shm bind and breaks Calamares' final umount.
+        ssh_dir = f"/home/{username}/.ssh"
+        target_env_call(['mkdir', '-p', ssh_dir])
+        target_env_call(['chmod', '700', ssh_dir])
+        rc = target_env_call([
+            'ssh-keygen', '-t', 'ed25519', '-N', '', '-C', email,
+            '-f', f'{ssh_dir}/id_ed25519',
+        ])
         if rc != 0:
             libcalamares.utils.warning(
                 f"ssh-keygen for {username} exited {rc}; "
                 "the user can run ssh-keygen manually after first login"
             )
         else:
+            target_env_call(['chown', '-R', f'{username}:{username}', ssh_dir])
             libcalamares.utils.debug(f"SSH ed25519 key generated for {username}")
 
     libcalamares.utils.debug("Git configuration complete")
