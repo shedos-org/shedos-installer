@@ -63,48 +63,52 @@ def _chroot(root_mount_point, cmd):
 
 
 def _kill_chroot_stragglers(root_mount_point):
-    """SIGKILL any process whose root is anchored at the chroot mount.
-
-    arch-chroot doesn't pid-namespace its children, so a daemon spawned
-    inside the chroot (postgres workers after a partial pg_ctl stop,
-    gpg-agent / dirmngr after pacman keyring work, anything else that
-    daemonises before its arch-chroot wrapper exits) is visible in the
-    host's /proc with /proc/<pid>/root pointing at the chroot. Those
-    stragglers pin bind-mounts and make Calamares' upstream umount
-    module fail with "device 'shm' could not be unmounted" at the very
-    end of install.
-
-    This sweep walks /proc once, matches by realpath of the root
-    symlink, and SIGKILLs the matches. Calamares itself runs with
-    root '/' so it is never a match; the explicit own-pid skip is
-    defence in depth.
+    """Free the target's /dev/shm so Calamares' umount module never
+    raises 'device shm could not be unmounted'. Three independent
+    layers: SIGKILL processes whose chroot root matches the target,
+    fuser -k anything still holding an fd on the bind, lazy-unmount
+    /dev/shm as a final fallback.
     """
+    killed = []
     try:
         real_root = os.path.realpath(root_mount_point)
     except OSError:
-        return []
-    own = os.getpid()
-    killed = []
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
-            continue
-        pid = int(entry)
-        if pid == own:
-            continue
-        try:
-            link = os.readlink(f"/proc/{entry}/root")
-        except OSError:
-            continue
-        try:
-            if os.path.realpath(link) != real_root:
+        real_root = None
+
+    if real_root:
+        own = os.getpid()
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
                 continue
-        except OSError:
-            continue
-        try:
-            os.kill(pid, signal.SIGKILL)
-            killed.append(pid)
-        except (OSError, ProcessLookupError):
-            pass
+            pid = int(entry)
+            if pid == own:
+                continue
+            try:
+                link = os.readlink(f"/proc/{entry}/root")
+            except OSError:
+                continue
+            try:
+                if os.path.realpath(link) != real_root:
+                    continue
+            except OSError:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.append(pid)
+            except (OSError, ProcessLookupError):
+                pass
+
+    shm_path = os.path.join(root_mount_point, "dev", "shm")
+    if os.path.ismount(shm_path):
+        subprocess.run(
+            ["fuser", "-k", "-KILL", "-m", shm_path],
+            capture_output=True, check=False,
+        )
+    if os.path.ismount(shm_path):
+        subprocess.run(
+            ["umount", "-l", shm_path],
+            capture_output=True, check=False,
+        )
     return killed
 
 
