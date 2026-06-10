@@ -47,7 +47,7 @@ class LimineInstaller:
                 return self._install_uefi()
             else:
                 return self._install_bios(disk_device)
-        except Exception as e:
+        except Exception:
             logger.exception("Unexpected error during bootloader installation")
             return False
 
@@ -120,7 +120,7 @@ class LimineInstaller:
     def _build_cmdline(self) -> str:
         """Compose the install-time kernel command line.
 
-        Two classes of token belong here:
+        Three classes of token belong here:
 
         1. Hardware/topology essentials that can't be derived after the
            fact — root=, rootflags=, rootfstype=, cryptdevice=,
@@ -154,6 +154,15 @@ class LimineInstaller:
            verified empirically on dev + test hardware. nodefer
            alone keeps fbcon ready without disabling VT mapping.
 
+        3. The LSM stack with AppArmor enabled —
+           lsm=landlock,lockdown,yama,integrity,apparmor,bpf. Stock
+           linux-zen's CONFIG_LSM ships without apparmor, and lsm= is a
+           full override of the kernel's LSM list, so the whole set is
+           spelled out. It's baked in here (not a [kernel.cmdline] append)
+           so AppArmor is enforcing from the very first boot, before any
+           `shedman apply` runs; existing installs get the same token via
+           shedos-system's _backfill_apparmor_lsm on upgrade.
+
         User-tunable tokens (nowatchdog, mitigations=*,
         split_lock_detect=off, nvme_core.default_ps_max_latency_us=*,
         etc.) are NOT included here. They live in
@@ -181,6 +190,7 @@ class LimineInstaller:
             "loglevel=3",
             "rd.udev.log_level=3",
             "fbcon=nodefer",
+            "lsm=landlock,lockdown,yama,integrity,apparmor,bpf",
         ])
         if self.nvidia:
             parts.append("nvidia_drm.modeset=1")
