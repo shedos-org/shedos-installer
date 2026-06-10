@@ -64,7 +64,7 @@ def test_copykernel_copies_each_kernel_and_initramfs(
     # Stage two fake "live ISO" kernels (different pkgbases).
     live_modules = tmp_path / "live-modules"
     for kver, pkgbase in [("7.0.3-arch1-2", "linux"),
-                          ("6.19.13-shedos", "shedos-kernel")]:
+                          ("7.0.11-zen1-1-zen", "linux-zen")]:
         d = live_modules / kver
         d.mkdir(parents=True)
         (d / "pkgbase").write_text(pkgbase + "\n")
@@ -72,8 +72,8 @@ def test_copykernel_copies_each_kernel_and_initramfs(
 
     live_boot = tmp_path / "bootmnt"
     live_boot.mkdir()
-    (live_boot / "initramfs-shedos-kernel.img").write_bytes(b"initramfs1")
-    (live_boot / "initramfs-shedos-kernel-fallback.img").write_bytes(b"initramfs2")
+    (live_boot / "initramfs-linux-zen.img").write_bytes(b"initramfs1")
+    (live_boot / "initramfs-linux-zen-fallback.img").write_bytes(b"initramfs2")
 
     mod = _load_module(
         "copykernel_main", MODULES_SRC / "copykernel/main.py",
@@ -86,9 +86,9 @@ def test_copykernel_copies_each_kernel_and_initramfs(
     assert mod.run() is None
     boot = target / "boot"
     assert (boot / "vmlinuz-linux").read_bytes().startswith(b"\x7fELF")
-    assert (boot / "vmlinuz-shedos-kernel").read_bytes().startswith(b"\x7fELF")
-    assert (boot / "initramfs-shedos-kernel.img").read_bytes() == b"initramfs1"
-    assert (boot / "initramfs-shedos-kernel-fallback.img").read_bytes() == b"initramfs2"
+    assert (boot / "vmlinuz-linux-zen").read_bytes().startswith(b"\x7fELF")
+    assert (boot / "initramfs-linux-zen.img").read_bytes() == b"initramfs1"
+    assert (boot / "initramfs-linux-zen-fallback.img").read_bytes() == b"initramfs2"
 
 
 def test_copykernel_no_kernels_returns_error(
