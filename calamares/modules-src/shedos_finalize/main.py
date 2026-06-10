@@ -721,6 +721,21 @@ def _verify_locale_generated(root_mount_point, root_mount):
         )
 
 
+def _secure_accounts(root_mount_point, username):
+    """The live image ships root and `shedos` passwordless. Lock root and
+    delete the leftover live user so neither lands on the install."""
+    r = _run(_chroot(root_mount_point, ["passwd", "-l", "root"]))
+    if r.returncode != 0:
+        _log_cmd_failure("passwd -l root", r)
+
+    if username != "shedos":
+        r = _run(_chroot(root_mount_point, ["userdel", "-r", "shedos"]))
+        if r.returncode != 0:
+            libcalamares.utils.debug(
+                "shedos_finalize: userdel shedos non-zero (likely absent); not fatal"
+            )
+
+
 def pretty_name():
     return "Finalizing ShedOS installation"
 
@@ -753,6 +768,8 @@ def run():
         libcalamares.utils.warning(
             f"shedos_finalize: Could not update /etc/issue: {e}"
         )
+
+    _secure_accounts(root_mount_point, username)
 
     _fix_locale_conf_encoding(root_mount)
     _verify_locale_generated(root_mount_point, root_mount)
