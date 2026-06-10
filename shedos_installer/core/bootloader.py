@@ -243,10 +243,10 @@ class LimineInstaller:
         """Configure mkinitcpio for BTRFS and optional LUKS."""
         logger.info("Configuring mkinitcpio")
 
-        kernel_path = self.mount_point / "boot" / "vmlinuz-shedos-kernel"
+        kernel_path = self.mount_point / "boot" / "vmlinuz-linux-zen"
         if not kernel_path.exists():
             logger.error(f"Kernel not found at {kernel_path}")
-            logger.error("shedos-kernel may not have been installed correctly")
+            logger.error("linux-zen may not have been installed correctly")
             return False
         logger.info(f"Kernel found at {kernel_path}")
 
@@ -302,8 +302,8 @@ class LimineInstaller:
             # can exit 0 with one preset silently failing (e.g. disk full),
             # so check both files exist before declaring success.
             required_initramfs = [
-                "initramfs-shedos-kernel.img",
-                "initramfs-shedos-kernel-fallback.img",
+                "initramfs-linux-zen.img",
+                "initramfs-linux-zen-fallback.img",
             ]
             missing = [
                 f for f in required_initramfs
@@ -343,9 +343,9 @@ class LimineInstaller:
                 return False
 
         files_to_copy = [
-            "vmlinuz-shedos-kernel",
-            "initramfs-shedos-kernel.img",
-            "initramfs-shedos-kernel-fallback.img",
+            "vmlinuz-linux-zen",
+            "initramfs-linux-zen.img",
+            "initramfs-linux-zen-fallback.img",
         ]
         success = True
 

@@ -85,8 +85,8 @@ def run():
             libcalamares.utils.warning(
                 f"copykernel: failed to copy {pkgbase} kernel: {e}"
             )
-            # shedos-kernel is the default boot entry — fatal if it can't be copied.
-            if pkgbase == "shedos-kernel":
+            # linux-zen is the default boot entry — fatal if it can't be copied.
+            if pkgbase == "linux-zen":
                 return (f"Failed to copy {pkgbase} kernel: {e}",
                         f"Source: {vmlinuz_src}, Destination: {vmlinuz_dst}")
             continue
