@@ -11,6 +11,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,16 +23,18 @@ MODULES_SRC = REPO_ROOT / "installer/calamares/modules-src"
 
 @pytest.fixture
 def fake_libcalamares(monkeypatch):
-    fake = types.ModuleType("libcalamares")
+    fake: Any = types.ModuleType("libcalamares")
     fake.globalstorage = MagicMock()
     fake.globalstorage.value.return_value = None
-    fake_utils = types.ModuleType("libcalamares.utils")
+    fake_utils: Any = types.ModuleType("libcalamares.utils")
     fake_utils.debug = MagicMock()
     fake_utils.warning = MagicMock()
-    # shedos_gitconfig imports this name directly from libcalamares.utils
-    # (via `from libcalamares.utils import check_target_env_call`); the
-    # binding has to exist before module load.
+    # shedos_gitconfig imports these names directly from libcalamares.utils
+    # (`from libcalamares.utils import check_target_env_call, target_env_call`),
+    # so the bindings have to exist before module load. target_env_call
+    # returns a shell exit code; default it to 0 (success).
     fake_utils.check_target_env_call = MagicMock()
+    fake_utils.target_env_call = MagicMock(return_value=0)
     fake.utils = fake_utils
     monkeypatch.setitem(sys.modules, "libcalamares", fake)
     monkeypatch.setitem(sys.modules, "libcalamares.utils", fake_utils)
@@ -79,8 +82,8 @@ def test_copykernel_copies_each_kernel_and_initramfs(
         "copykernel_main", MODULES_SRC / "copykernel/main.py",
     )
     monkeypatch.setattr(mod.glob, "glob",
-                        lambda pat: [str(p) for p in
-                                     sorted(live_modules.glob("*/pkgbase"))])
+                        lambda _: [str(p) for p in
+                                   sorted(live_modules.glob("*/pkgbase"))])
     monkeypatch.setattr(mod, "_LIVE_BOOT_DIRS", (str(live_boot),))
 
     assert mod.run() is None
@@ -102,11 +105,11 @@ def test_copykernel_no_kernels_returns_error(
     mod = _load_module(
         "copykernel_main_nokernels", MODULES_SRC / "copykernel/main.py",
     )
-    monkeypatch.setattr(mod.glob, "glob", lambda pat: [])
+    monkeypatch.setattr(mod.glob, "glob", lambda _: [])
 
     result = mod.run()
     assert result is not None
-    title, _body = result
+    title, _ = result
     assert "No kernels" in title
 
 
@@ -157,7 +160,7 @@ def test_gitconfig_falls_back_to_username(fake_libcalamares, tmp_path):
 
 def test_gitconfig_returns_none_when_username_missing(fake_libcalamares):
     """No username → warn and return None. No file is written."""
-    fake_libcalamares.globalstorage.value.side_effect = lambda k: None
+    fake_libcalamares.globalstorage.value.side_effect = lambda _: None
     mod = _load_module(
         "shedos_gitconfig_main_nouser",
         MODULES_SRC / "shedos_gitconfig/main.py",
@@ -310,7 +313,7 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
 
 
 def test_finalize_returns_error_when_rootmount_missing(fake_libcalamares):
-    fake_libcalamares.globalstorage.value.side_effect = lambda k: None
+    fake_libcalamares.globalstorage.value.side_effect = lambda _: None
     mod = _load_module(
         "shedos_finalize_main_noroot",
         MODULES_SRC / "shedos_finalize/main.py",
@@ -394,7 +397,7 @@ def test_enable_one_service_falls_back_to_chroot(
 
 
 def test_configs_returns_error_when_rootmount_missing(fake_libcalamares):
-    fake_libcalamares.globalstorage.value.side_effect = lambda k: None
+    fake_libcalamares.globalstorage.value.side_effect = lambda _: None
     mod = _load_module(
         "shedos_configs_main_noroot",
         MODULES_SRC / "shedos_configs/main.py",
