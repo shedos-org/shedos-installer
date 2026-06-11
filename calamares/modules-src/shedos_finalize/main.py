@@ -112,6 +112,15 @@ def _kill_chroot_stragglers(root_mount_point):
     return killed
 
 
+def _deobscure(s):
+    """Reverse CalamaresUtils::obscure (String.cpp) — the KStringHandler
+    scramble Calamares applies before storing the user password in
+    globalstorage: chars <= 0x21 pass through, the rest map to
+    0x1001F - code. It's an involution, so applying it again recovers
+    the plaintext."""
+    return "".join(c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in s)
+
+
 def _pg_quote_ident(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -159,16 +168,24 @@ def _bootstrap_pg_user(root_mount_point, username):
         try:
             persisted_log_host.parent.mkdir(parents=True, exist_ok=True)
             persisted_log_host.write_text("\n".join(report_lines) + "\n")
+            # The report can mention role names and command output;
+            # root-only like every other credentials-adjacent log.
+            persisted_log_host.chmod(0o600)
         except Exception as e:
             libcalamares.utils.warning(
                 f"shedos_finalize: could not persist pg-bootstrap report: {e}"
             )
 
-    # Password may or may not be exposed by Calamares' users module. If
-    # it's hashed (shadow $id$…$ form), it's useless for postgres.
+    # Calamares stores the user password in globalstorage obscured
+    # (users Config.cpp calls String::obscure before setting it), so
+    # the raw value is never directly usable — the postgres role used
+    # to get the scrambled text as its password. Recover the
+    # plaintext; the shadow-hash guard stays as a cheap sanity check.
     raw_pw = libcalamares.globalstorage.value("password")
     if not raw_pw or (isinstance(raw_pw, str) and raw_pw.startswith("$")):
         raw_pw = None
+    elif isinstance(raw_pw, str):
+        raw_pw = _deobscure(raw_pw)
     report_lines.append(f"# raw_pw_available={bool(raw_pw)}")
 
     ident = _pg_quote_ident(username)

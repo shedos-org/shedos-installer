@@ -466,3 +466,23 @@ def test_configs_seeds_sync_manifest_from_pkg_defaults(
     import hashlib
     expected = hashlib.sha256(b"hello=world\n").hexdigest()
     assert manifest.read_text().strip() == expected
+
+
+# ─── I6/I9/I4 regressions ───────────────────────────────────────────
+
+
+def test_finalize_deobscure_recovers_calamares_obscured_text(fake_libcalamares):
+    mod = _load_module(
+        "shedos_finalize_main_deobscure",
+        MODULES_SRC / "shedos_finalize/main.py",
+    )
+    plaintext = "S3cret! pa55+word"
+    # CalamaresUtils::obscure (String.cpp): <= 0x21 passes through,
+    # the rest map to 0x1001F - code. Same formula, so the test
+    # asserts the involution property end to end.
+    obscured = "".join(
+        c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in plaintext
+    )
+    assert obscured != plaintext
+    assert mod._deobscure(obscured) == plaintext
+    assert mod._deobscure(mod._deobscure(plaintext)) == plaintext
