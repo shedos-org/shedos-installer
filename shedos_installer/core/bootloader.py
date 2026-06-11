@@ -202,34 +202,89 @@ class LimineInstaller:
             logger.warning(f"efibootmgr failed (non-fatal): {result.stderr}")
 
     def _install_bios(self, disk_device: str) -> bool:
-        """Install Limine for BIOS systems."""
+        """Install Limine for BIOS systems.
+
+        Limine's BIOS stages read FAT12/16/32 and ISO9660 only, so
+        limine-bios.sys, limine.conf and the kernels all live on the
+        FAT partition the hybrid layout provides at /boot/efi —
+        exactly the volume EFI installs boot from. The earlier
+        version put them inside the btrfs @ subvolume, which Limine
+        cannot read, and reported success anyway."""
         logger.info("Installing Limine for BIOS")
 
         try:
-            boot_dir = self.mount_point / "boot" / "limine"
-            boot_dir.mkdir(parents=True, exist_ok=True)
+            fat_boot = self.mount_point / "boot" / "efi"
+            if not fat_boot.is_dir() or not run_command(
+                    ["findmnt", "-no", "SOURCE", str(fat_boot)]).success:
+                logger.error(
+                    "BIOS install needs the FAT boot partition mounted at "
+                    "/boot/efi (created automatically on erase-disk "
+                    "installs). Manual partitioning must include a FAT32 "
+                    "partition mounted there — Limine cannot read btrfs."
+                )
+                return False
 
-            limine_src = Path("/usr/share/limine")
-            bios_sys_src = limine_src / "limine-bios.sys"
+            limine_dir = fat_boot / "limine"
+            limine_dir.mkdir(parents=True, exist_ok=True)
 
+            bios_sys_src = Path("/usr/share/limine/limine-bios.sys")
             if not bios_sys_src.exists():
                 logger.error(f"Limine BIOS file not found: {bios_sys_src}")
                 return False
 
-            logger.info(f"Copying {bios_sys_src} to {boot_dir / 'limine-bios.sys'}")
-            shutil.copy2(bios_sys_src, boot_dir / "limine-bios.sys")
+            logger.info(f"Copying {bios_sys_src} to {limine_dir}")
+            shutil.copy2(bios_sys_src, limine_dir / "limine-bios.sys")
 
-            logger.info(f"Installing Limine to MBR of {disk_device}")
-            result = run_command(["limine", "bios-install", disk_device])
+            # GPT requires an EF02 bios-boot partition for stage2 —
+            # `limine bios-install` never uses the pre-partition gap on
+            # GPT and errors without one. msdos embeds in the post-MBR
+            # gap and takes no partition argument.
+            pttype = run_command(["lsblk", "-rno", "PTTYPE", disk_device])
+            table = pttype.stdout.strip().splitlines()[0] if (
+                pttype.success and pttype.stdout.strip()) else ""
+            install_cmd = ["limine", "bios-install", disk_device]
+            if table == "gpt":
+                partn = self._find_bios_boot_partn(disk_device)
+                if not partn:
+                    logger.error(
+                        "GPT disk has no BIOS boot (EF02) partition; "
+                        "limine bios-install has nowhere to embed its "
+                        "stage2. Erase-disk installs create one "
+                        "automatically; manual GPT layouts must include "
+                        "an unformatted 8 MiB EF02 partition."
+                    )
+                    return False
+                install_cmd.append(partn)
+
+            logger.info(f"Running {' '.join(install_cmd)}")
+            result = run_command(install_cmd)
             if not result.success:
-                logger.error(f"Failed to install Limine to MBR: {result.stderr}")
+                logger.error(f"limine bios-install failed: {result.stderr}")
                 return False
 
-            return self._create_config(boot_dir)
+            # limine.conf at the FAT volume root (same search path the
+            # EFI install uses), kernels + initramfs beside it.
+            if not self._create_config(fat_boot):
+                return False
+            return self._copy_kernels_to_esp()
 
         except Exception as e:
             logger.exception(f"BIOS installation failed: {e}")
             return False
+
+    def _find_bios_boot_partn(self, disk_device: str) -> Optional[str]:
+        """1-based partition number of the disk's BIOS boot (EF02)
+        partition, or None."""
+        bios_boot_guid = "21686148-6449-6e6f-744e-656564454649"
+        probe = run_command(
+            ["lsblk", "-rno", "PARTN,PARTTYPE", disk_device])
+        if not probe.success:
+            return None
+        for line in probe.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and fields[1].lower() == bios_boot_guid:
+                return fields[0]
+        return None
 
     def _build_cmdline(self) -> str:
         """Compose the install-time kernel command line.
@@ -439,14 +494,15 @@ class LimineInstaller:
             for f in required_initramfs:
                 logger.info(f"initramfs created at {self.mount_point / 'boot' / f}")
 
-            if self.is_uefi:
-                # Copy the freshly regenerated kernel + initramfs to the ESP.
-                # Must run AFTER mkinitcpio so the ESP picks up the variant
-                # with our final HOOKS (LUKS + Plymouth).
-                logger.info("Copying freshly generated kernels to ESP...")
-                if not self._copy_kernels_to_esp():
-                    logger.error("Failed to copy regenerated kernels to ESP")
-                    return False
+            # Copy the freshly regenerated kernel + initramfs to the FAT
+            # boot volume (the ESP — BIOS installs boot from the same
+            # partition, since Limine reads only FAT/ISO9660). Must run
+            # AFTER mkinitcpio so it picks up the variant with our final
+            # HOOKS (LUKS + Plymouth).
+            logger.info("Copying freshly generated kernels to the boot volume...")
+            if not self._copy_kernels_to_esp():
+                logger.error("Failed to copy regenerated kernels to the boot volume")
+                return False
 
             return True
         except Exception as e:
