@@ -434,6 +434,10 @@ class LimineInstaller:
         if self.luks_uuid:
             hooks.append("encrypt")
 
+        # Boot-failure auto-recovery: counts boots that never reach the
+        # greeter and falls back to a snapshot clone after three.
+        hooks.append("shedos-recovery")
+
         # Skip fsck — btrfs handles its own integrity, and the fsck hook
         # can break boot on btrfs roots.
         hooks.append("filesystems")
