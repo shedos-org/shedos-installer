@@ -25,6 +25,41 @@ def pretty_name():
     return "Installing Limine bootloader"
 
 
+def _scan_partitions(partitions):
+    """Pick (root_uuid, root_fs, luks_uuid, disk_device) from
+    Calamares' globalstorage partition list.
+
+    Only the root partition's LUKS UUID counts: the cmdline must
+    decrypt the container holding the root fs. With several encrypted
+    partitions (e.g. / plus a LUKS /home) any-partition-wins used to
+    pick whichever came last."""
+    root_uuid = None
+    root_fs = None
+    luks_uuid = None
+    disk_device = None
+
+    for partition in partitions:
+        if partition.get("mountPoint", "") != "/":
+            continue
+        root_uuid = partition.get("uuid")
+        root_fs = (partition.get("fs") or "").lower()
+        device = partition.get("device", "")
+
+        # Strip the partition number off to get the parent disk:
+        #   /dev/sda1       -> /dev/sda
+        #   /dev/nvme0n1p1  -> /dev/nvme0n1
+        if device:
+            if "nvme" in device or "mmcblk" in device:
+                disk_device = re.sub(r'p\d+$', '', device)
+            else:
+                disk_device = re.sub(r'\d+$', '', device)
+
+        if partition.get("luksMapperName"):
+            luks_uuid = partition.get("luksUuid")
+
+    return root_uuid, root_fs, luks_uuid, disk_device
+
+
 def run():
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")
 
@@ -65,31 +100,22 @@ def run():
     else:
         libcalamares.utils.debug("BIOS boot detected — skipping ESP detection/mount")
 
-    root_uuid = None
-    luks_uuid = None
-    disk_device = None
-
-    for partition in partitions:
-        mount_point = partition.get("mountPoint", "")
-
-        if mount_point == "/":
-            root_uuid = partition.get("uuid")
-            device = partition.get("device", "")
-
-            # Strip the partition number off to get the parent disk:
-            #   /dev/sda1       -> /dev/sda
-            #   /dev/nvme0n1p1  -> /dev/nvme0n1
-            if device:
-                if "nvme" in device or "mmcblk" in device:
-                    disk_device = re.sub(r'p\d+$', '', device)
-                else:
-                    disk_device = re.sub(r'\d+$', '', device)
-
-        if partition.get("luksMapperName"):
-            luks_uuid = partition.get("luksUuid")
+    root_uuid, root_fs, luks_uuid, disk_device = _scan_partitions(partitions)
 
     if not root_uuid:
         return ("Missing root UUID", "Could not determine root partition UUID")
+
+    # The kernel cmdline this module renders hardcodes the btrfs @
+    # subvolume layout, and ShedOS's snapshot/rollback stack requires
+    # it; a manually-partitioned ext4/xfs root would kernel-panic on
+    # first boot and silently lack the entire safety net.
+    if root_fs and root_fs not in ("btrfs", "luks", "luks2"):
+        return (
+            "Unsupported root filesystem",
+            f"ShedOS requires a btrfs root (snapshots and rollback "
+            f"depend on it); the selected root partition is {root_fs}. "
+            f"Re-partition with btrfs as the root filesystem.",
+        )
 
     libcalamares.utils.debug(f"Root UUID: {root_uuid}")
     libcalamares.utils.debug(f"Disk device: {disk_device}")

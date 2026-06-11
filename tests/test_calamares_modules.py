@@ -486,3 +486,42 @@ def test_finalize_deobscure_recovers_calamares_obscured_text(fake_libcalamares):
     assert obscured != plaintext
     assert mod._deobscure(obscured) == plaintext
     assert mod._deobscure(mod._deobscure(plaintext)) == plaintext
+
+
+def test_limine_luks_uuid_taken_from_root_partition_only(fake_libcalamares):
+    mod = _load_module(
+        "shedos_limine_main_scan",
+        MODULES_SRC / "shedos_limine/main.py",
+    )
+    root_uuid, root_fs, luks_uuid, disk = mod._scan_partitions([
+        {"mountPoint": "/", "uuid": "root-uuid", "fs": "btrfs",
+         "device": "/dev/nvme0n1p2",
+         "luksMapperName": "luks-root", "luksUuid": "root-luks"},
+        {"mountPoint": "/home", "uuid": "home-uuid", "fs": "btrfs",
+         "device": "/dev/nvme0n1p3",
+         "luksMapperName": "luks-home", "luksUuid": "home-luks"},
+    ])
+    assert root_uuid == "root-uuid"
+    assert root_fs == "btrfs"
+    assert luks_uuid == "root-luks"   # used to be home-luks (last wins)
+    assert disk == "/dev/nvme0n1"
+
+
+def test_limine_rejects_non_btrfs_root(fake_libcalamares, monkeypatch):
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "rootMountPoint": "/tmp/anywhere",
+        "partitions": [
+            {"mountPoint": "/", "uuid": "root-uuid", "fs": "ext4",
+             "device": "/dev/sda2"},
+        ],
+    }.get(k)
+    mod = _load_module(
+        "shedos_limine_main_ext4",
+        MODULES_SRC / "shedos_limine/main.py",
+    )
+    monkeypatch.setattr(mod, "is_uefi", lambda: False)
+    result = mod.run()
+    assert result is not None
+    title, detail = result
+    assert "filesystem" in title.lower()
+    assert "btrfs" in detail
