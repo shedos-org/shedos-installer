@@ -895,11 +895,18 @@ def run():
         if r.returncode != 0:
             _log_cmd_failure(f"usermod -aG seat {username}", r)
 
+    # runuser, not `su -`: a login shell spawns oh-my-zsh's ssh-agent,
+    # which pins the chroot's /dev/shm bind and breaks the final
+    # umount — the exact failure shedos_gitconfig was rewritten to
+    # avoid; this only survived thanks to the straggler SIGKILL
+    # backstop. runuser also skips the PAM session stack, which can't
+    # work inside arch-chroot anyway (see the PG cluster init above).
     _run(_chroot(root_mount_point,
-                 ["su", "-", username, "-c", "xdg-user-dirs-update"]))
+                 ["runuser", "-u", username, "--", "xdg-user-dirs-update"]))
     for user_dir in ("Projects", "Work"):
         _run(_chroot(root_mount_point,
-                     ["su", "-", username, "-c", f"mkdir -p ~/{user_dir}"]))
+                     ["runuser", "-u", username, "--",
+                      "mkdir", "-p", f"/home/{username}/{user_dir}"]))
 
     # /etc/shedos/login-user — shedos-greeter reads this to know which
     # account to authenticate. Falls back to /etc/passwd auto-detect if
