@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -81,11 +82,124 @@ class LimineInstaller:
             # ESP root is where Limine looks by default; the /EFI/limine/
             # config alone is not enough.
             esp_root = self.mount_point / "boot" / "efi"
-            return self._create_config(esp_root)
+            if not self._create_config(esp_root):
+                return False
+
+            # Best-effort dual-boot + firmware registration; neither
+            # may fail the install.
+            self._setup_windows_chainload()
+            self._register_nvram_entry()
+            return True
 
         except Exception as e:
             logger.exception(f"UEFI installation failed: {e}")
             return False
+
+    def _detect_windows_esp_uuid(self) -> Optional[str]:
+        """Filesystem UUID of an ESP carrying the Windows boot manager,
+        or None. The target ESP is checked in place; every other
+        EFI-system partition is probed with a read-only mount."""
+        bootmgfw = Path("EFI/Microsoft/Boot/bootmgfw.efi")
+        target_esp = self.mount_point / "boot" / "efi"
+        if (target_esp / bootmgfw).is_file():
+            src = run_command(["findmnt", "-no", "SOURCE", str(target_esp)])
+            if src.success and src.stdout.strip():
+                fs_uuid = run_command(
+                    ["lsblk", "-rno", "UUID", src.stdout.strip()])
+                if fs_uuid.success and fs_uuid.stdout.strip():
+                    return fs_uuid.stdout.strip()
+            return None
+
+        probe = run_command(["lsblk", "-rno", "PATH,PARTTYPE,UUID"])
+        if not probe.success:
+            return None
+        esp_guid = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+        for line in probe.stdout.splitlines():
+            fields = line.split()
+            if len(fields) < 2 or fields[1].lower() != esp_guid:
+                continue
+            path = fields[0]
+            fs_uuid = fields[2] if len(fields) > 2 else ""
+            with tempfile.TemporaryDirectory(prefix="shedos-esp.") as td:
+                # The target ESP is busy (mounted) and fails here,
+                # which is fine — it was already checked above.
+                if not run_command(["mount", "-o", "ro", path, td]).success:
+                    continue
+                try:
+                    found = (Path(td) / bootmgfw).is_file()
+                finally:
+                    run_command(["umount", td])
+            if found and fs_uuid:
+                return fs_uuid
+        return None
+
+    def _setup_windows_chainload(self) -> None:
+        """Write the Windows entry render-limine-config.sh appends on
+        every regeneration. Without this, a dual-boot machine boots
+        straight into ShedOS with no path back to Windows."""
+        try:
+            fs_uuid = self._detect_windows_esp_uuid()
+        except Exception:
+            logger.exception("Windows detection failed (non-fatal)")
+            return
+        if not fs_uuid:
+            logger.info("No Windows boot manager found; single-boot config")
+            return
+        logger.info(f"Windows found on ESP {fs_uuid}; adding chainload entry")
+        extra = self.mount_point / "etc" / "shedos" / "limine-extra-entries.conf"
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_text(
+            "# Written by the installer: Windows boot manager found on\n"
+            f"# the ESP with filesystem UUID {fs_uuid}.\n"
+            "# render-limine-config.sh appends this file verbatim to\n"
+            "# limine.conf on every regeneration.\n"
+            "/Windows\n"
+            "    protocol: efi_chainload\n"
+            f"    image_path: uuid({fs_uuid}):"
+            "/EFI/Microsoft/Boot/bootmgfw.efi\n"
+        )
+        # Re-render so the entry lands in this install's limine.conf,
+        # not just the next kernel upgrade's.
+        run_chroot(["/usr/lib/shedos/render-limine-config.sh"],
+                   str(self.mount_point))
+
+    def _register_nvram_entry(self) -> None:
+        """Register ShedOS with the firmware via efibootmgr. The
+        removable-path BOOTX64.EFI copy keeps us bootable without it,
+        but a real NVRAM entry makes firmware boot menus list ShedOS
+        by name next to Windows."""
+        esp = self.mount_point / "boot" / "efi"
+        src = run_command(["findmnt", "-no", "SOURCE", str(esp)])
+        if not src.success or not src.stdout.strip():
+            logger.warning("efibootmgr: cannot resolve the ESP device; skipping")
+            return
+        dev = src.stdout.strip()
+        pkname = run_command(["lsblk", "-rno", "PKNAME", dev])
+        partn = run_command(["lsblk", "-rno", "PARTN", dev])
+        if not (pkname.success and pkname.stdout.strip()
+                and partn.success and partn.stdout.strip()):
+            logger.warning(f"efibootmgr: cannot split {dev}; skipping")
+            return
+        disk = "/dev/" + pkname.stdout.strip()
+        part = partn.stdout.strip()
+
+        # Drop stale ShedOS entries from earlier installs so reinstalls
+        # don't pile up duplicates.
+        listing = run_command(["efibootmgr"])
+        if listing.success:
+            for line in listing.stdout.splitlines():
+                if line.startswith("Boot") and line.rstrip().endswith("ShedOS"):
+                    bootnum = line[4:8]
+                    run_command(["efibootmgr", "-b", bootnum, "-B"])
+
+        result = run_command([
+            "efibootmgr", "--create", "--disk", disk, "--part", part,
+            "--label", "ShedOS", "--loader", r"\EFI\limine\BOOTX64.EFI",
+        ])
+        if result.success:
+            logger.info(f"efibootmgr: registered ShedOS ({disk} part {part})")
+        else:
+            logger.warning(f"efibootmgr failed (non-fatal): {result.stderr}")
 
     def _install_bios(self, disk_device: str) -> bool:
         """Install Limine for BIOS systems."""
