@@ -16,11 +16,39 @@ sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.config import PACKAGE_DIR
 from shedos_installer.utils.command import run_chroot
-from shedos_installer.utils.hardware import get_gpus
+from shedos_installer.utils.hardware import get_gpus, nvidia_open_supported
 
 
 def pretty_name():
     return "Configuring NVIDIA drivers"
+
+
+def _note_legacy_gpu():
+    """When an NVIDIA card is present but unsupported by the open
+    modules, leave a note explaining the nouveau fallback and the AUR
+    legacy-branch path. Silent when there's no NVIDIA hardware."""
+    gpus = get_gpus()
+    legacy = [g for g in gpus if g.is_nvidia and not nvidia_open_supported(g)]
+    if not legacy:
+        return
+    root_mount_point = libcalamares.globalstorage.value("rootMountPoint") \
+        or "/tmp/calamares-root"
+    try:
+        note = Path(root_mount_point) / "etc/shedos/nvidia-legacy-gpu"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(
+            "This machine's NVIDIA GPU predates Turing; the open kernel\n"
+            "modules (the only NVIDIA driver in the repos since 590)\n"
+            "cannot drive it. The desktop runs on nouveau/modesetting.\n"
+            "For the proprietary legacy branch, see the AUR package\n"
+            "nvidia-580xx-dkms and https://wiki.archlinux.org/title/NVIDIA\n"
+            + "".join(f"GPU: {g.model}\n" for g in legacy)
+        )
+        libcalamares.utils.warning(
+            f"NVIDIA GPU unsupported by open modules; note written to {note}"
+        )
+    except Exception as exc:
+        libcalamares.utils.warning(f"Could not write legacy-GPU note: {exc}")
 
 
 def run():
@@ -28,6 +56,7 @@ def run():
 
     if not install_nvidia:
         libcalamares.utils.debug("NVIDIA installation check: shedos_install_nvidia is False/None")
+        _note_legacy_gpu()
         return None
 
     root_mount_point = libcalamares.globalstorage.value("rootMountPoint")

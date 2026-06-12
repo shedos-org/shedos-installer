@@ -18,7 +18,7 @@ INSTALLER_ROOT = Path("/opt/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.core.bootloader import LimineInstaller
-from shedos_installer.utils.hardware import get_gpus, is_uefi
+from shedos_installer.utils.hardware import get_gpus, nvidia_open_supported, is_uefi
 
 
 def pretty_name():
@@ -124,9 +124,15 @@ def run():
 
     gpus = get_gpus()
     has_nvidia = any(gpu.is_nvidia for gpu in gpus)
+    # Pre-Turing cards can't run the open kernel modules (the only
+    # NVIDIA driver in the repos since 590 dropped Maxwell/Pascal);
+    # installing it would ship a driver that refuses to bind the GPU.
+    # Those systems boot on nouveau/modesetting and shedos_nvidia
+    # leaves a note explaining the AUR legacy path.
+    nvidia_supported = any(nvidia_open_supported(gpu) for gpu in gpus)
 
     profile = libcalamares.globalstorage.value("shedos_profile")
-    install_nvidia = has_nvidia and profile in ["desktop", "developer", "full"]
+    install_nvidia = nvidia_supported and profile in ["desktop", "developer", "full"]
 
     libcalamares.utils.debug(f"NVIDIA detected: {has_nvidia}")
     libcalamares.utils.debug(f"Install NVIDIA drivers: {install_nvidia}")

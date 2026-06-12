@@ -161,7 +161,9 @@ def get_gpus() -> list[GpuInfo]:
             if is_nvidia:
                 driver = "nvidia"
                 # Try to detect NVIDIA series
-                if any(x in description for x in ["RTX 40", "RTX 4"]):
+                if any(x in description for x in ["RTX 50", "RTX 5"]):
+                    nvidia_series = "Blackwell"
+                elif any(x in description for x in ["RTX 40", "RTX 4"]):
                     nvidia_series = "Ada Lovelace"
                 elif any(x in description for x in ["RTX 30", "RTX 3"]):
                     nvidia_series = "Ampere"
@@ -195,6 +197,20 @@ def get_gpus() -> list[GpuInfo]:
             logger.debug(f"Found GPU: {vendor} - {description}")
 
     return gpus
+
+
+def nvidia_open_supported(gpu: "GpuInfo") -> bool:
+    """Whether NVIDIA's open kernel modules can drive this GPU.
+
+    The 590 driver dropped Maxwell/Pascal entirely and Arch's main
+    packages are the open modules (Turing and newer). Pre-Turing
+    cards need an AUR-only legacy branch we can't install from the
+    offline ISO. Unknown series on an NVIDIA card means it's newer
+    than our name patterns - assume supported.
+    """
+    if not gpu.is_nvidia:
+        return False
+    return gpu.nvidia_series != "Pascal/Maxwell"
 
 
 def detect_other_os() -> list[dict[str, str]]:
