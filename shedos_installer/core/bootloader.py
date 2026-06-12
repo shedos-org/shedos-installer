@@ -344,6 +344,11 @@ class LimineInstaller:
         parts: list[str] = []
         if self.luks_uuid:
             mapper_name = f"luks-{self.luks_uuid}"
+            # rd.luks.* is what sd-encrypt reads; cryptdevice= is kept
+            # so the same cmdline still boots a legacy-initrd rescue
+            # image. Each initrd style ignores the other's token.
+            parts.append(f"rd.luks.name={self.luks_uuid}={mapper_name}")
+            parts.append("rd.luks.options=discard")
             parts.append(
                 f"cryptdevice=UUID={self.luks_uuid}:{mapper_name}:allow-discards"
             )
@@ -451,10 +456,16 @@ class LimineInstaller:
             return False
         logger.info(f"Kernel found at {kernel_path}")
 
-        hooks = ["base", "udev", "autodetect", "modconf", "kms", "keyboard", "keymap", "consolefont", "block", "plymouth"]
+        # systemd-style initrd from the start: the legacy udev+keymap
+        # stack is what migrate-mkinitcpio-hooks.sh exists to escape
+        # (busybox keymap.bin breaks with current kbd), and both the
+        # boot-failure recovery unit and hibernate resume only work
+        # under the systemd initrd.
+        hooks = ["base", "systemd", "autodetect", "modconf", "kms",
+                 "keyboard", "sd-vconsole", "block", "plymouth"]
 
         if self.luks_uuid:
-            hooks.append("encrypt")
+            hooks.append("sd-encrypt")
 
         # Boot-failure auto-recovery: counts boots that never reach the
         # greeter and falls back to a snapshot clone after three.
