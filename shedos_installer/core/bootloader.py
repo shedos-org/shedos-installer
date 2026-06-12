@@ -363,7 +363,29 @@ class LimineInstaller:
         ])
         if self.nvidia:
             parts.append("nvidia_drm.modeset=1")
+
+        # Hibernation: when the partitioner created disk swap (the
+        # "suspend" choice), point the systemd initrd at it. The
+        # target fstab is the path-independent source — both install
+        # flows write it before the bootloader step. Swapfiles (path
+        # entries, no UUID=) are skipped; resume_offset plumbing is
+        # not worth it for a layout the installer never creates.
+        swap_uuid = self._fstab_swap_uuid()
+        if swap_uuid:
+            parts.append(f"resume=UUID={swap_uuid}")
         return " ".join(parts)
+
+    def _fstab_swap_uuid(self) -> str | None:
+        fstab = self.mount_point / "etc" / "fstab"
+        try:
+            for line in fstab.read_text().splitlines():
+                fields = line.split()
+                if len(fields) >= 3 and fields[2] == "swap" \
+                        and fields[0].startswith("UUID="):
+                    return fields[0].removeprefix("UUID=")
+        except OSError:
+            pass
+        return None
 
     def _create_config(self, config_dir: Path) -> bool:
         """Render Limine configuration via the packaged renderer.
