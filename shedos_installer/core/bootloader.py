@@ -461,7 +461,13 @@ class LimineInstaller:
         # (busybox keymap.bin breaks with current kbd), and both the
         # boot-failure recovery unit and hibernate resume only work
         # under the systemd initrd.
-        hooks = ["base", "systemd", "autodetect", "modconf", "kms",
+        # No `kms` hook: it pulls every GPU driver's firmware (~145 MiB of
+        # NVIDIA GSP and friends) into the initramfs, overflowing the FAT
+        # ESP Limine boots from. Without it the splash renders on the
+        # builtin simpledrm framebuffer and the GPU driver loads from the
+        # root fs after mount. Proprietary-NVIDIA early KMS still works —
+        # it rides the MODULES line below, not this hook.
+        hooks = ["base", "systemd", "autodetect", "modconf",
                  "keyboard", "sd-vconsole", "block", "plymouth"]
 
         if self.luks_uuid:
