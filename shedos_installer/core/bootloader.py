@@ -21,13 +21,18 @@ class LimineInstaller:
         root_uuid: str = "",
         luks_uuid: Optional[str] = None,
         nvidia: bool = False,
+        uefi: Optional[bool] = None,
     ) -> None:
-        """Initialize Limine installer."""
+        """Initialize Limine installer.
+
+        uefi None detects the firmware from the running host; pass it
+        explicitly when building an image whose firmware isn't the host's.
+        """
         self.mount_point = Path(mount_point)
         self.root_uuid = root_uuid
         self.luks_uuid = luks_uuid
         self.nvidia = nvidia
-        self.is_uefi = is_uefi()
+        self.is_uefi = is_uefi() if uefi is None else uefi
         
         logger.info(f"LimineInstaller init: UEFI={self.is_uefi}, RootUUID={self.root_uuid}, LuksUUID={self.luks_uuid}")
 
