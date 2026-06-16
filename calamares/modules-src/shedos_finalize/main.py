@@ -380,7 +380,7 @@ def _manual_enable(root_mount, service):
     return True
 
 
-def _persist_wifi_profiles(root_mount_point, root_mount):
+def _persist_wifi_profiles(root_mount):
     """Copy NetworkManager + iwd WiFi profiles from the live ISO onto
     the installed system, ship the NM-through-iwd routing drop-in,
     and mirror the psk-flags=0 default for new connections joined
@@ -882,7 +882,7 @@ def run():
             f"system to diagnose."
         )
 
-    _persist_wifi_profiles(root_mount_point, root_mount)
+    _persist_wifi_profiles(root_mount)
 
     # libseat group membership — Hyprland and any other libseat client
     # need this to acquire seat0. Calamares' users module SHOULD have
@@ -924,34 +924,15 @@ def run():
             f"shedos_finalize: writing {login_user_file}: {e}"
         )
 
-    # greetd autologin: strip the [initial_session] block left over from
-    # the live ISO (which autologs the live `shedos` user); if Calamares
-    # set autologinUser, write a new [initial_session] for that user.
-    greetd_config = root_mount / "etc" / "greetd" / "config.toml"
-    try:
-        if greetd_config.exists():
-            import tomlkit
-            doc = tomlkit.parse(greetd_config.read_text())
-            if "initial_session" in doc:
-                del doc["initial_session"]
+    # greetd reads its config from the vendor drop-in; nothing to write here.
 
-            autologin_user = libcalamares.globalstorage.value("autologinUser")
-            if autologin_user:
-                initial = tomlkit.table()
-                initial["command"] = "Hyprland"
-                initial["user"] = autologin_user
-                doc["initial_session"] = initial
-                libcalamares.utils.debug(
-                    f"shedos_finalize: greetd autologin set for {autologin_user}"
-                )
+    # Mask getty@tty1 (+ autovt alias) so greetd owns tty1. Must live here
+    # (install target only), NOT in shedos-system — that package is also the
+    # live ISO, whose autologin depends on getty@tty1.
+    _run(["systemctl", f"--root={root_mount_point}", "mask",
+          "getty@tty1.service", "autovt@tty1.service"])
 
-            greetd_config.write_text(tomlkit.dumps(doc))
-    except Exception as e:
-        libcalamares.utils.warning(
-            f"shedos_finalize: greetd autologin setup: {e}"
-        )
-
-    os.system("sync")
+    os.sync()
 
     # Final sweep: SIGKILL anything still alive inside the chroot before
     # Calamares' umount module runs. shedos_finalize is the last shedos
