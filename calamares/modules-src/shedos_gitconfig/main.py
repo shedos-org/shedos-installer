@@ -8,9 +8,15 @@ setup group. When they also ticked the SSH checkbox, an ed25519 key is
 generated as the new user."""
 
 import os
+import re
 
 import libcalamares
 from libcalamares.utils import check_target_env_call, target_env_call
+
+# A newline in name/email would let a crafted value inject extra gitconfig
+# sections (e.g. a [core] sshCommand). Reject control chars before writing.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def pretty_name():
@@ -31,6 +37,18 @@ def run():
 
     if not fullname:
         fullname = username
+
+    if _CONTROL_CHARS.search(fullname):
+        libcalamares.utils.warning(
+            "Full name contains control characters; falling back to username"
+        )
+        fullname = username
+
+    if email and not _EMAIL.match(email):
+        libcalamares.utils.warning(
+            "Skipping git user.email: value is not a valid address"
+        )
+        email = ""
 
     libcalamares.utils.debug(f"Configuring git for: {fullname}")
 
