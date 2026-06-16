@@ -33,7 +33,10 @@ class LimineInstaller:
         self.luks_uuid = luks_uuid
         self.nvidia = nvidia
         self.is_uefi = is_uefi() if uefi is None else uefi
-        
+        # User-facing reason for the most recent install() failure, surfaced by
+        # the Calamares module instead of a generic "bootloader failed" abort.
+        self.last_error: Optional[str] = None
+
         logger.info(f"LimineInstaller init: UEFI={self.is_uefi}, RootUUID={self.root_uuid}, LuksUUID={self.luks_uuid}")
 
     def install(self, disk_device: str) -> bool:
@@ -251,20 +254,21 @@ class LimineInstaller:
             if table == "gpt":
                 partn = self._find_bios_boot_partn(disk_device)
                 if not partn:
-                    logger.error(
-                        "GPT disk has no BIOS boot (EF02) partition; "
-                        "limine bios-install has nowhere to embed its "
-                        "stage2. Erase-disk installs create one "
-                        "automatically; manual GPT layouts must include "
-                        "an unformatted 8 MiB EF02 partition."
+                    self.last_error = (
+                        "This GPT disk has no BIOS-boot (EF02) partition for "
+                        "Limine to embed into. Re-partition with an 8 MiB EF02 "
+                        "partition (erase-disk installs add one automatically), "
+                        "or install in UEFI mode."
                     )
+                    logger.error(self.last_error)
                     return False
                 install_cmd.append(partn)
 
             logger.info(f"Running {' '.join(install_cmd)}")
             result = run_command(install_cmd)
             if not result.success:
-                logger.error(f"limine bios-install failed: {result.stderr}")
+                self.last_error = f"limine bios-install failed: {result.stderr.strip()}"
+                logger.error(self.last_error)
                 return False
 
             # limine.conf at the FAT volume root (same search path the

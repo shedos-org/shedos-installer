@@ -145,7 +145,8 @@ def run():
     )
 
     if not limine.install(disk_device or ""):
-        return ("Bootloader installation failed", "Failed to install Limine bootloader")
+        return ("Bootloader installation failed",
+                limine.last_error or "Failed to install Limine bootloader")
 
     libcalamares.utils.debug("Limine bootloader installed")
 
