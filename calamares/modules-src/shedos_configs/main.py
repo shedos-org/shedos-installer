@@ -47,6 +47,28 @@ def pretty_name():
     return "Deploying ShedOS configurations"
 
 
+def _deploy_dir(src, dest):
+    """Copy src→dest without blindly rmtree-ing a home dir. useradd -m seeds
+    these paths from /etc/skel, so move any existing dest aside as a transient
+    rollback, copy, then drop the backup on success (restore it on failure)."""
+    bak = None
+    if dest.exists() or dest.is_symlink():
+        bak = dest.with_name(dest.name + ".shedos-bak")
+        if bak.exists() or bak.is_symlink():
+            shutil.rmtree(bak)
+        os.replace(dest, bak)
+    try:
+        shutil.copytree(src, dest)
+    except Exception:
+        if bak is not None:
+            if dest.exists():
+                shutil.rmtree(dest)
+            os.replace(bak, dest)
+        raise
+    if bak is not None:
+        shutil.rmtree(bak)
+
+
 def run():
     libcalamares.utils.debug("shedos_configs: Starting configuration deployment")
 
@@ -114,9 +136,7 @@ def run():
                 for item in src_path.iterdir():
                     item_dest = dest_path / item.name
                     if item.is_dir():
-                        if item_dest.exists():
-                            shutil.rmtree(item_dest)
-                        shutil.copytree(item, item_dest)
+                        _deploy_dir(item, item_dest)
                     else:
                         shutil.copy2(item, item_dest)
                 libcalamares.utils.debug(f"shedos_configs: Copied dir contents: {src_name}")
@@ -151,9 +171,7 @@ def run():
                     if item.is_file():
                         shutil.copy2(item, dest_file)
                     else:
-                        if dest_file.exists():
-                            shutil.rmtree(dest_file)
-                        shutil.copytree(item, dest_file)
+                        _deploy_dir(item, dest_file)
                     libcalamares.utils.debug(f"shedos_configs: Copied zsh/{item.name}")
                 except Exception as e:
                     libcalamares.utils.warning(f"shedos_configs: Failed to copy zsh/{item.name}: {e}")
@@ -183,9 +201,7 @@ def run():
     omz_dest = user_home / ".oh-my-zsh"
     if omz_src.is_dir():
         try:
-            if omz_dest.exists():
-                shutil.rmtree(omz_dest)
-            shutil.copytree(omz_src, omz_dest)
+            _deploy_dir(omz_src, omz_dest)
 
             # Symlink powerlevel10k into OMZ's custom-themes dir so .zshrc's
             # ZSH_THEME="powerlevel10k/powerlevel10k" resolves.
