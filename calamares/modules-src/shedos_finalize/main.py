@@ -112,15 +112,6 @@ def _kill_chroot_stragglers(root_mount_point):
     return killed
 
 
-def _deobscure(s):
-    """Reverse CalamaresUtils::obscure (String.cpp) — the KStringHandler
-    scramble Calamares applies before storing the user password in
-    globalstorage: chars <= 0x21 pass through, the rest map to
-    0x1001F - code. It's an involution, so applying it again recovers
-    the plaintext."""
-    return "".join(c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in s)
-
-
 def _pg_quote_ident(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -157,6 +148,10 @@ def _bootstrap_pg_user(root_mount_point, username):
         f"# username={username!r}",
     ]
 
+    # Peer-authed role, no password: pg_hba `local all all peer` lets the OS
+    # user connect with no flags (matching shedman db's first-boot path), so
+    # the role needs none. Reusing the login password here used to leak it into
+    # the persisted report.
     def _record_cmd(label, result):
         report_lines.append(f"\n[{label}] rc={result.returncode}")
         if result.stdout:
@@ -176,18 +171,6 @@ def _bootstrap_pg_user(root_mount_point, username):
                 f"shedos_finalize: could not persist pg-bootstrap report: {e}"
             )
 
-    # Calamares stores the user password in globalstorage obscured
-    # (users Config.cpp calls String::obscure before setting it), so
-    # the raw value is never directly usable — the postgres role used
-    # to get the scrambled text as its password. Recover the
-    # plaintext; the shadow-hash guard stays as a cheap sanity check.
-    raw_pw = libcalamares.globalstorage.value("password")
-    if not raw_pw or (isinstance(raw_pw, str) and raw_pw.startswith("$")):
-        raw_pw = None
-    elif isinstance(raw_pw, str):
-        raw_pw = _deobscure(raw_pw)
-    report_lines.append(f"# raw_pw_available={bool(raw_pw)}")
-
     ident = _pg_quote_ident(username)
     name_lit = _pg_quote_literal(username)
 
@@ -198,8 +181,6 @@ def _bootstrap_pg_user(root_mount_point, username):
         f"  END IF;\n"
         f"END $$;\n"
     )
-    if raw_pw:
-        sql += f"ALTER ROLE {ident} WITH PASSWORD {_pg_quote_literal(raw_pw)};\n"
     sql += (
         f"SELECT 'CREATE DATABASE {ident} OWNER {ident}'\n"
         f"  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = {name_lit})\n"
@@ -284,9 +265,8 @@ exit $(( start_rc | psql_rc | stop_rc ))
                 "retry on next boot."
             )
         else:
-            pw_note = "with password" if raw_pw else "peer-auth only (no password)"
             libcalamares.utils.debug(
-                f"shedos_finalize: created PG role + DB for {username} ({pw_note})"
+                f"shedos_finalize: created PG role + DB for {username}"
             )
     finally:
         _persist_report()
@@ -769,7 +749,7 @@ def run():
     libcalamares.utils.debug(f"shedos_finalize: Root mount: {root_mount}")
 
     username = libcalamares.globalstorage.value("username")
-    fullname = libcalamares.globalstorage.value("fullname") or username
+    fullname = libcalamares.globalstorage.value("fullName") or username
     libcalamares.utils.debug(
         f"shedos_finalize: username={username}, fullname={fullname}"
     )
