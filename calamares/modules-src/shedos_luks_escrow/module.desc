@@ -1,0 +1,8 @@
+# ShedOS LUKS recovery-key escrow.
+# Enrolls the recovery key (generated + shown + acknowledged by the
+# recoverykeyq view step) as a second keyslot on the root container.
+type: job
+name: shedos_luks_escrow
+interface: python
+script: main.py
+weight: 21

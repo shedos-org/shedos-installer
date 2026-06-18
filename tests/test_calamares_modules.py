@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -512,3 +513,59 @@ def test_limine_rejects_non_btrfs_root(fake_libcalamares, monkeypatch):
     title, detail = result
     assert "filesystem" in title.lower()
     assert "btrfs" in detail
+
+
+# ─── shedos_luks_escrow ─────────────────────────────────────────────
+
+
+def _load_escrow(name="shedos_luks_escrow_main"):
+    return _load_module(name, MODULES_SRC / "shedos_luks_escrow/main.py")
+
+
+def test_luks_escrow_deobscure_is_an_involution(fake_libcalamares):
+    mod = _load_escrow("shedos_luks_escrow_deob")
+    secret = "S3cret! pa55+word"
+    assert mod._deobscure(mod._deobscure(secret)) == secret
+
+
+def test_luks_escrow_enrolls_recovery_key(fake_libcalamares, monkeypatch, tmp_path):
+    mod = _load_escrow()
+    pw = "hunter2"
+    obscured = "".join(c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in pw)
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "shedos_recovery_key": "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY",
+        "partitions": [
+            {"mountPoint": "/", "device": "/dev/vda2",
+             "luksMapperName": "luks-root", "luksPassphrase": obscured},
+        ],
+    }.get(k)
+    # Keep the secret keyfile out of /run (not writable as the test user).
+    # Capture the real mkstemp first — mod.tempfile is the same module
+    # object we patch, so a naive lambda would recurse into itself.
+    real_mkstemp = tempfile.mkstemp
+    monkeypatch.setattr(mod.tempfile, "mkstemp",
+                        lambda **kw: real_mkstemp(dir=str(tmp_path)))
+    captured = {}
+
+    def fake_run(argv, input=None, capture_output=False):
+        captured["argv"] = argv
+        captured["input"] = input
+        return types.SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    assert mod.run() is None
+    assert captured["argv"][:3] == ["cryptsetup", "luksAddKey", "--key-file=-"]
+    assert "/dev/vda2" in captured["argv"]
+    # The existing passphrase is fed deobscured on stdin, never on argv.
+    assert captured["input"] == pw.encode()
+    assert pw not in " ".join(captured["argv"])
+
+
+def test_luks_escrow_noop_when_encryption_opted_out(fake_libcalamares, monkeypatch):
+    mod = _load_escrow("shedos_luks_escrow_noop")
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: None
+    called = {"n": 0}
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1))
+    assert mod.run() is None
+    assert called["n"] == 0
