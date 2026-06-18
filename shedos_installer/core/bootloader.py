@@ -22,6 +22,8 @@ class LimineInstaller:
         luks_uuid: Optional[str] = None,
         nvidia: bool = False,
         uefi: Optional[bool] = None,
+        swap_luks_uuid: Optional[str] = None,
+        swap_luks_mapper: Optional[str] = None,
     ) -> None:
         """Initialize Limine installer.
 
@@ -31,6 +33,11 @@ class LimineInstaller:
         self.mount_point = Path(mount_point)
         self.root_uuid = root_uuid
         self.luks_uuid = luks_uuid
+        # The swap container is a separate LUKS2 device on the encrypted
+        # autopartition path; the initramfs needs its own rd.luks.name to
+        # unlock it before resume.
+        self.swap_luks_uuid = swap_luks_uuid
+        self.swap_luks_mapper = swap_luks_mapper
         self.nvidia = nvidia
         self.is_uefi = is_uefi() if uefi is None else uefi
         # User-facing reason for the most recent install() failure, surfaced by
@@ -362,6 +369,12 @@ class LimineInstaller:
                 f"cryptdevice=UUID={self.luks_uuid}:{mapper_name}:allow-discards"
             )
             parts.append(f"root=/dev/mapper/{mapper_name}")
+            # Swap is its own LUKS2 container on the encrypted autopart
+            # path; unlock it too so resume can reach the decrypted device.
+            if self.swap_luks_uuid and self.swap_luks_mapper:
+                parts.append(
+                    f"rd.luks.name={self.swap_luks_uuid}={self.swap_luks_mapper}"
+                )
         else:
             parts.append(f"root=UUID={self.root_uuid}")
         parts.extend([
@@ -384,9 +397,14 @@ class LimineInstaller:
         # flows write it before the bootloader step. Swapfiles (path
         # entries, no UUID=) are skipped; resume_offset plumbing is
         # not worth it for a layout the installer never creates.
-        swap_uuid = self._fstab_swap_uuid()
-        if swap_uuid:
-            parts.append(f"resume=UUID={swap_uuid}")
+        if self.swap_luks_mapper:
+            # Encrypted swap: its fstab line is /dev/mapper/<name>, never a
+            # UUID=, so resume must name the decrypted mapper directly.
+            parts.append(f"resume=/dev/mapper/{self.swap_luks_mapper}")
+        else:
+            swap_uuid = self._fstab_swap_uuid()
+            if swap_uuid:
+                parts.append(f"resume=UUID={swap_uuid}")
         return " ".join(parts)
 
     def _fstab_swap_uuid(self) -> str | None:

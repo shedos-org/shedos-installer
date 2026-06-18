@@ -26,19 +26,27 @@ def pretty_name():
 
 
 def _scan_partitions(partitions):
-    """Pick (root_uuid, root_fs, luks_uuid, disk_device) from
+    """Pick (root_uuid, root_fs, luks_uuid, disk_device, swap_luks) from
     Calamares' globalstorage partition list.
 
-    Only the root partition's LUKS UUID counts: the cmdline must
-    decrypt the container holding the root fs. With several encrypted
-    partitions (e.g. / plus a LUKS /home) any-partition-wins used to
-    pick whichever came last."""
+    Only the root partition's LUKS UUID counts for `luks_uuid`: the cmdline
+    must decrypt the container holding the root fs. With several encrypted
+    partitions (e.g. / plus a LUKS /home) any-partition-wins used to pick
+    whichever came last.
+
+    `swap_luks` is (luks_uuid, mapper_name) for the separate encrypted swap
+    container, or None. Hibernation resumes from the decrypted swap mapper,
+    so the initramfs needs that container's own rd.luks.name to unlock it."""
     root_uuid = None
     root_fs = None
     luks_uuid = None
     disk_device = None
+    swap_luks = None
 
     for partition in partitions:
+        if (partition.get("fs") or "").lower() == "linuxswap" \
+                and partition.get("luksMapperName"):
+            swap_luks = (partition.get("luksUuid"), partition.get("luksMapperName"))
         if partition.get("mountPoint", "") != "/":
             continue
         root_uuid = partition.get("uuid")
@@ -57,7 +65,7 @@ def _scan_partitions(partitions):
         if partition.get("luksMapperName"):
             luks_uuid = partition.get("luksUuid")
 
-    return root_uuid, root_fs, luks_uuid, disk_device
+    return root_uuid, root_fs, luks_uuid, disk_device, swap_luks
 
 
 def run():
@@ -100,7 +108,7 @@ def run():
     else:
         libcalamares.utils.debug("BIOS boot detected — skipping ESP detection/mount")
 
-    root_uuid, root_fs, luks_uuid, disk_device = _scan_partitions(partitions)
+    root_uuid, root_fs, luks_uuid, disk_device, swap_luks = _scan_partitions(partitions)
 
     if not root_uuid:
         return ("Missing root UUID", "Could not determine root partition UUID")
@@ -137,11 +145,14 @@ def run():
     libcalamares.utils.debug(f"NVIDIA detected: {has_nvidia}")
     libcalamares.utils.debug(f"Install NVIDIA drivers: {install_nvidia}")
 
+    swap_luks_uuid, swap_luks_mapper = swap_luks if swap_luks else (None, None)
     limine = LimineInstaller(
         mount_point=root_mount_point,
         root_uuid=root_uuid,
         luks_uuid=luks_uuid,
         nvidia=install_nvidia,
+        swap_luks_uuid=swap_luks_uuid,
+        swap_luks_mapper=swap_luks_mapper,
     )
 
     if not limine.install(disk_device or ""):

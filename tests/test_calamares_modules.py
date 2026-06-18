@@ -476,18 +476,22 @@ def test_limine_luks_uuid_taken_from_root_partition_only(fake_libcalamares):
         "shedos_limine_main_scan",
         MODULES_SRC / "shedos_limine/main.py",
     )
-    root_uuid, root_fs, luks_uuid, disk = mod._scan_partitions([
+    root_uuid, root_fs, luks_uuid, disk, swap_luks = mod._scan_partitions([
         {"mountPoint": "/", "uuid": "root-uuid", "fs": "btrfs",
          "device": "/dev/nvme0n1p2",
          "luksMapperName": "luks-root", "luksUuid": "root-luks"},
         {"mountPoint": "/home", "uuid": "home-uuid", "fs": "btrfs",
          "device": "/dev/nvme0n1p3",
          "luksMapperName": "luks-home", "luksUuid": "home-luks"},
+        {"mountPoint": "", "uuid": "swap-uuid", "fs": "linuxswap",
+         "device": "/dev/nvme0n1p4",
+         "luksMapperName": "swap", "luksUuid": "swap-luks"},
     ])
     assert root_uuid == "root-uuid"
     assert root_fs == "btrfs"
-    assert luks_uuid == "root-luks"   # used to be home-luks (last wins)
+    assert luks_uuid == "root-luks"   # root only, never /home or swap
     assert disk == "/dev/nvme0n1"
+    assert swap_luks == ("swap-luks", "swap")   # captured for the resume unlock
 
 
 def test_limine_rejects_non_btrfs_root(fake_libcalamares, monkeypatch):
