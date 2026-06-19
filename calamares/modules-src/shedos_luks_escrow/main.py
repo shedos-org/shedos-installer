@@ -20,13 +20,6 @@ def pretty_name():
     return "Enrolling recovery key"
 
 
-def _deobscure(text):
-    """Inverse of Calamares' String::obscure — an involution: code points
-    <= 0x21 pass through, the rest map to 0x1001F - code. Calamares stores
-    the LUKS passphrase obscured in globalstorage; this recovers it."""
-    return "".join(c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in text)
-
-
 def run():
     recovery = libcalamares.globalstorage.value("shedos_recovery_key")
     if not recovery:
@@ -42,12 +35,13 @@ def run():
         return None  # no LUKS root — nothing to enroll
 
     device = root.get("device")
-    obscured = root.get("luksPassphrase")
-    if not device or not obscured:
+    # Calamares stores the partition LUKS passphrase in plaintext (only the
+    # user-account password is obscured); the historical luksbootkeyfile job
+    # wrote it raw to the keyfile. Use it as-is — deobscuring corrupts it.
+    passphrase = root.get("luksPassphrase")
+    if not device or not passphrase:
         return ("Recovery key not enrolled",
                 "The encryption passphrase was not available to authorize it.")
-
-    passphrase = _deobscure(obscured)
 
     # The new (recovery) key goes in a private 0600 file under /run's
     # tmpfs — never on argv — and is removed straight after. The existing
