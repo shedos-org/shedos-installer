@@ -364,7 +364,10 @@ class LimineInstaller:
             # so the same cmdline still boots a legacy-initrd rescue
             # image. Each initrd style ignores the other's token.
             parts.append(f"rd.luks.name={self.luks_uuid}={mapper_name}")
-            parts.append("rd.luks.options=discard")
+            # tries=0 keeps prompting forever. The default of 3 ends in a
+            # blank screen with no way back, and one unseen typo (or a blind
+            # recovery-key entry) is enough to hit it.
+            parts.append("rd.luks.options=discard,tries=0")
             parts.append(
                 f"cryptdevice=UUID={self.luks_uuid}:{mapper_name}:allow-discards"
             )
