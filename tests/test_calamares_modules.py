@@ -522,21 +522,19 @@ def _load_escrow(name="shedos_luks_escrow_main"):
     return _load_module(name, MODULES_SRC / "shedos_luks_escrow/main.py")
 
 
-def test_luks_escrow_deobscure_is_an_involution(fake_libcalamares):
-    mod = _load_escrow("shedos_luks_escrow_deob")
-    secret = "S3cret! pa55+word"
-    assert mod._deobscure(mod._deobscure(secret)) == secret
-
-
-def test_luks_escrow_enrolls_recovery_key(fake_libcalamares, monkeypatch, tmp_path):
+def test_luks_escrow_enrolls_recovery_key_on_every_container(
+        fake_libcalamares, monkeypatch, tmp_path):
     mod = _load_escrow()
+    # Calamares stores the partition LUKS passphrase in plaintext (only the
+    # user-account password is obscured); the escrow uses it as-is to authorize.
     pw = "hunter2"
-    obscured = "".join(c if ord(c) <= 0x21 else chr(0x1001F - ord(c)) for c in pw)
     fake_libcalamares.globalstorage.value.side_effect = lambda k: {
         "shedos_recovery_key": "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY",
         "partitions": [
             {"mountPoint": "/", "device": "/dev/vda2",
-             "luksMapperName": "luks-root", "luksPassphrase": obscured},
+             "luksMapperName": "luks-root", "luksPassphrase": pw},
+            {"mountPoint": "", "device": "/dev/vda3",
+             "luksMapperName": "luks-swap", "luksPassphrase": pw},
         ],
     }.get(k)
     # Keep the secret keyfile out of /run (not writable as the test user).
@@ -545,20 +543,25 @@ def test_luks_escrow_enrolls_recovery_key(fake_libcalamares, monkeypatch, tmp_pa
     real_mkstemp = tempfile.mkstemp
     monkeypatch.setattr(mod.tempfile, "mkstemp",
                         lambda **kw: real_mkstemp(dir=str(tmp_path)))
-    captured = {}
+    calls = []
 
     def fake_run(argv, input=None, capture_output=False):
-        captured["argv"] = argv
-        captured["input"] = input
+        calls.append({"argv": argv, "input": input})
         return types.SimpleNamespace(returncode=0, stderr=b"")
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     assert mod.run() is None
-    assert captured["argv"][:3] == ["cryptsetup", "luksAddKey", "--key-file=-"]
-    assert "/dev/vda2" in captured["argv"]
-    # The existing passphrase is fed deobscured on stdin, never on argv.
-    assert captured["input"] == pw.encode()
-    assert pw not in " ".join(captured["argv"])
+    # Enrolled on the root AND the swap container — a recovery unlock has to
+    # open every device the initramfs prompts for at boot, not just root.
+    devices = {c["argv"][-2] for c in calls}
+    assert devices == {"/dev/vda2", "/dev/vda3"}
+    # Four spellings (upper/lower x dashed/undashed) per container.
+    assert len(calls) == 8
+    for c in calls:
+        assert c["argv"][:3] == ["cryptsetup", "luksAddKey", "--key-file=-"]
+        # The passphrase is fed plaintext on stdin, never on argv.
+        assert c["input"] == pw.encode()
+        assert pw not in " ".join(c["argv"])
 
 
 def test_luks_escrow_noop_when_encryption_opted_out(fake_libcalamares, monkeypatch):
