@@ -80,17 +80,12 @@ def test_provision_blocks_when_signature_unverified(tmp_path, monkeypatch):
     assert e.provision([str(target)]) is False
 
 
-def test_arm_enrolls_without_microsoft_single_boot(tmp_path, mock_run_command):
+def test_arm_always_keeps_microsoft(tmp_path, mock_run_command):
+    """--microsoft is unconditional: a single-boot box's MS-signed option ROMs
+    (dGPU/NIC) would otherwise be refused under Secure Boot — a black-screen
+    brick. The Windows-only gate was the latent T4 brick this fixes."""
     e = _enroller(tmp_path)
-    assert e.arm(has_windows=False) is True
-    cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
-    assert any("enroll-keys" in c for c in cmds)
-    assert not any("--microsoft" in c for c in cmds)
-
-
-def test_arm_keeps_microsoft_when_windows_present(tmp_path, mock_run_command):
-    e = _enroller(tmp_path)
-    assert e.arm(has_windows=True) is True
+    assert e.arm() is True
     cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
     assert any("enroll-keys" in c and "--microsoft" in c for c in cmds)
 
@@ -105,4 +100,4 @@ def test_arm_failure_is_loud(tmp_path, monkeypatch):
         "shedos_installer.core.secureboot.run_chroot",
         lambda cmd, **kw: make_result(returncode=1, stderr="firmware rejected the keys"),
     )
-    assert e.arm(has_windows=False) is False
+    assert e.arm() is False

@@ -106,16 +106,17 @@ class SecureBootEnroller:
             "PCRBanks=sha256\n"
         )
 
-    def arm(self, has_windows: bool) -> bool:
+    def arm(self) -> bool:
         """The single IRREVERSIBLE step: enroll this box's PK/KEK/db into
         firmware so Secure Boot is enforced from the next boot. Call ONLY after
         the ENTIRE signed chain — the Limine copies AND every placed UKI — is
         verified, so any upstream failure leaves Secure Boot off and the box
-        bootable. --microsoft keeps the MS CA when Windows is present on ANY ESP
-        (the caller probes all of them), or a dual-boot Windows stops booting."""
-        cmd = SBCTL + ["enroll-keys", "--yes-this-might-brick-my-machine"]
-        if has_windows:
-            cmd.append("--microsoft")
+        bootable. --microsoft is ALWAYS included: discrete-GPU and NIC option
+        ROMs are signed by the Microsoft UEFI CA, so ShedOS-only keys make
+        firmware refuse the option ROM under Secure Boot — a black-screen brick
+        even on a single-boot box. Keeping the MS CA is the standard tradeoff
+        (the rollback exposure is documented)."""
+        cmd = SBCTL + ["enroll-keys", "--microsoft", "--yes-this-might-brick-my-machine"]
         res = run_chroot(cmd, mount_point=str(self.mount_point))
         if not res.success:
             logger.error(

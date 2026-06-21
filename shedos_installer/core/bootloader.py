@@ -694,11 +694,10 @@ class LimineInstaller:
         # Limine copies plus every placed + verified UKI) is in place. Arming
         # earlier risks a brick: a signing or placement failure after the
         # firmware is locked into enforcing leaves an unsigned binary firmware
-        # rejects. --microsoft is decided by an all-ESP Windows probe (a
-        # dual-boot Windows can live on a separate ESP).
+        # rejects. arm() always keeps the Microsoft CA so a single-boot box's
+        # MS-signed option ROMs (dGPU/NIC) still init under Secure Boot.
         if self._sb_enroller is not None:
-            has_windows = self._detect_windows_esp_uuid() is not None
-            self._sb_enroller.arm(has_windows)
+            self._sb_enroller.arm()
         return True
 
     def _seed_esp_config(self) -> None:
