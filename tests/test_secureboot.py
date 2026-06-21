@@ -1,4 +1,6 @@
-"""SecureBootEnroller — provision/enroll only in Setup Mode, never on BIOS."""
+"""SecureBootEnroller — provision (sign + verify) is split from the single
+irreversible arm step, so a failure anywhere leaves Secure Boot off and the box
+bootable, and arming only ever follows a verified-signed chain."""
 
 from shedos_installer.core.secureboot import SecureBootEnroller
 
@@ -8,18 +10,18 @@ def _enroller(tmp_path, uefi=True):
     return SecureBootEnroller(mount_point=str(tmp_path), uefi=uefi)
 
 
-def test_bios_never_touches_firmware(tmp_path, mock_run_command):
+def test_bios_provision_is_noop(tmp_path, mock_run_command):
     e = _enroller(tmp_path, uefi=False)
-    assert e.enroll([str(tmp_path / "BOOTX64.EFI")]) is True
+    assert e.provision([str(tmp_path / "BOOTX64.EFI")]) is False
     assert mock_run_command.call_count == 0
 
 
-def test_user_mode_skips_everything(tmp_path, mock_run_command, monkeypatch):
+def test_user_mode_provision_skips_everything(tmp_path, mock_run_command, monkeypatch):
     e = _enroller(tmp_path)
     monkeypatch.setattr(e, "probe_setup_mode", lambda: False)
-    assert e.enroll([str(tmp_path / "BOOTX64.EFI")]) is True
     # Self-signing with keys the firmware hasn't enrolled is worse than
     # unsigned (firmware rejects it), so outside Setup Mode we do nothing.
+    assert e.provision([str(tmp_path / "BOOTX64.EFI")]) is False
     assert mock_run_command.call_count == 0
     assert not (tmp_path / "etc" / "kernel" / "uki.conf").exists()
 
@@ -43,46 +45,64 @@ def test_rewrite_uki_conf_is_signing_form(tmp_path):
     assert "pcr-private.pem" in conf and "pcr-public.pem" in conf
 
 
-def test_setup_mode_enrolls_signs_and_rewrites(tmp_path, mock_run_command, monkeypatch):
+def test_provision_signs_verifies_and_does_not_arm(tmp_path, mock_run_command, monkeypatch):
+    """provision signs + sbverifies the Limine copies and rewrites uki.conf, but
+    NEVER arms firmware — enroll-keys is the caller's last step."""
     e = _enroller(tmp_path)
     monkeypatch.setattr(e, "probe_setup_mode", lambda: True)
     target = tmp_path / "BOOTX64.EFI"
     target.write_bytes(b"MZ")
-    assert e.enroll([str(target)]) is True
+    assert e.provision([str(target)]) is True
     cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
-    assert any("enroll-keys" in c for c in cmds)
-    assert not any("--microsoft" in c for c in cmds)   # no Windows on this ESP
-    assert any("sign -s" in c for c in cmds)            # Limine copy signed
+    assert any("sign -s" in c for c in cmds)            # signed
+    assert any("sbverify" in c for c in cmds)           # and verified
+    assert not any("enroll-keys" in c for c in cmds)    # but NOT armed
     assert (tmp_path / "etc" / "kernel" / "uki.conf").exists()
 
 
-def test_dualboot_enroll_keeps_microsoft(tmp_path, mock_run_command, monkeypatch):
-    e = _enroller(tmp_path)
-    monkeypatch.setattr(e, "probe_setup_mode", lambda: True)
-    win = tmp_path / "boot" / "efi" / "EFI" / "Microsoft" / "Boot"
-    win.mkdir(parents=True)
-    (win / "bootmgfw.efi").write_bytes(b"MZ")
-    e.enroll([str(tmp_path / "BOOTX64.EFI")])
-    cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
-    assert any("enroll-keys" in c and "--microsoft" in c for c in cmds)
-
-
-def test_enroll_failure_is_loud_not_silent(tmp_path, monkeypatch):
-    """A failed firmware enrollment must NOT report success — the box is left
-    provisioned (keys minted, uki.conf signing, images signed) but enroll()
-    returns False so the caller/status can't mistake it for active Secure Boot."""
+def test_provision_blocks_when_signature_unverified(tmp_path, monkeypatch):
+    """A Limine copy that fails sbverify must make provision return False so the
+    caller never arms a chain the firmware would reject (the brick the review
+    caught: arm-before-verify)."""
     from tests.conftest import make_result
 
     e = _enroller(tmp_path)
     monkeypatch.setattr(e, "probe_setup_mode", lambda: True)
 
     def fake(cmd, **kw):
-        if "enroll-keys" in cmd:
-            return make_result(returncode=1, stderr="firmware rejected the keys")
+        if "sbverify" in cmd:
+            return make_result(returncode=1, stderr="No signature table present")
         return make_result()
 
     monkeypatch.setattr("shedos_installer.core.secureboot.run_chroot", fake)
     target = tmp_path / "BOOTX64.EFI"
     target.write_bytes(b"MZ")
-    assert e.enroll([str(target)]) is False
-    assert (tmp_path / "etc" / "kernel" / "uki.conf").exists()   # still signing-form
+    assert e.provision([str(target)]) is False
+
+
+def test_arm_enrolls_without_microsoft_single_boot(tmp_path, mock_run_command):
+    e = _enroller(tmp_path)
+    assert e.arm(has_windows=False) is True
+    cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
+    assert any("enroll-keys" in c for c in cmds)
+    assert not any("--microsoft" in c for c in cmds)
+
+
+def test_arm_keeps_microsoft_when_windows_present(tmp_path, mock_run_command):
+    e = _enroller(tmp_path)
+    assert e.arm(has_windows=True) is True
+    cmds = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
+    assert any("enroll-keys" in c and "--microsoft" in c for c in cmds)
+
+
+def test_arm_failure_is_loud(tmp_path, monkeypatch):
+    """A rejected enrollment returns False (not a false success); the box still
+    boots and shedman secureboot enroll completes it later."""
+    from tests.conftest import make_result
+
+    e = _enroller(tmp_path)
+    monkeypatch.setattr(
+        "shedos_installer.core.secureboot.run_chroot",
+        lambda cmd, **kw: make_result(returncode=1, stderr="firmware rejected the keys"),
+    )
+    assert e.arm(has_windows=False) is False

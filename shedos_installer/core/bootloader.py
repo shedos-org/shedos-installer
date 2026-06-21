@@ -43,6 +43,10 @@ class LimineInstaller:
         # User-facing reason for the most recent install() failure, surfaced by
         # the Calamares module instead of a generic "bootloader failed" abort.
         self.last_error: Optional[str] = None
+        # Set to a provisioned SecureBootEnroller by _enroll_secureboot when the
+        # box is in Setup Mode and the Limine copies verify; _place_ukis_and_
+        # render arms it LAST, once the UKIs are signed and placed.
+        self._sb_enroller = None
 
         logger.info(f"LimineInstaller init: UEFI={self.is_uefi}, RootUUID={self.root_uuid}, LuksUUID={self.luks_uuid}")
 
@@ -110,10 +114,13 @@ class LimineInstaller:
             return False
 
     def _enroll_secureboot(self) -> None:
-        """Mint + enroll this box's Secure Boot keys, rewrite uki.conf to its
-        signing form, and sign the Limine EFI copies. Best-effort: a key-gen or
-        enroll failure leaves the box booting unsigned (Limine still
-        chainloads), never bricked. Only acts when firmware is in Setup Mode."""
+        """Provision this box's Secure Boot keys, rewrite uki.conf to its
+        signing form, and sign + verify the Limine EFI copies — but do NOT arm
+        firmware here. Arming is the one irreversible step and must come LAST,
+        after the UKIs are signed and placed (_place_ukis_and_render), so a
+        later failure leaves Secure Boot off and the box bootable. Best-effort:
+        a failure leaves the box booting unsigned (Limine still chainloads),
+        never bricked. Only provisions when firmware is in Setup Mode."""
         from shedos_installer.core.secureboot import SecureBootEnroller
 
         esp = self.mount_point / "boot" / "efi"
@@ -122,9 +129,11 @@ class LimineInstaller:
             str(esp / "EFI" / "limine" / "BOOTX64.EFI"),
         ]
         try:
-            SecureBootEnroller(str(self.mount_point), uefi=True).enroll(targets)
+            enroller = SecureBootEnroller(str(self.mount_point), uefi=True)
+            if enroller.provision(targets):
+                self._sb_enroller = enroller
         except Exception:
-            logger.exception("Secure Boot enrollment failed (non-fatal)")
+            logger.exception("Secure Boot provisioning failed (non-fatal)")
 
     def _detect_windows_esp_uuid(self) -> Optional[str]:
         """Filesystem UUID of an ESP carrying the Windows boot manager,
@@ -680,6 +689,16 @@ class LimineInstaller:
 
         self._register_nvram_entry()
         self._write_containers()
+
+        # Arm Secure Boot LAST — only now that the ENTIRE signed chain (the
+        # Limine copies plus every placed + verified UKI) is in place. Arming
+        # earlier risks a brick: a signing or placement failure after the
+        # firmware is locked into enforcing leaves an unsigned binary firmware
+        # rejects. --microsoft is decided by an all-ESP Windows probe (a
+        # dual-boot Windows can live on a separate ESP).
+        if self._sb_enroller is not None:
+            has_windows = self._detect_windows_esp_uuid() is not None
+            self._sb_enroller.arm(has_windows)
         return True
 
     def _seed_esp_config(self) -> None:

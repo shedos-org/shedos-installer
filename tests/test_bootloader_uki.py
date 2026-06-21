@@ -79,6 +79,58 @@ def test_place_ukis_renders_only_after_verify(tmp_path, mock_run_command, monkey
     assert (tmp_path / "boot" / "efi" / "limine.conf").exists()   # seeded first
 
 
+def test_place_ukis_arms_secureboot_last(tmp_path, mock_run_command, monkeypatch):
+    """When Secure Boot was provisioned, firmware arming is the LAST step —
+    after the UKIs are verified and the menu rendered — so any earlier failure
+    leaves Secure Boot off and the box bootable."""
+    inst = _inst(tmp_path, uefi=True)
+    order = []
+    monkeypatch.setattr(inst, "_verify_uki_on_esp",
+                        lambda: order.append("verify") or True)
+    monkeypatch.setattr(inst, "_create_config",
+                        lambda d: order.append("render") or True)
+    monkeypatch.setattr(inst, "_register_nvram_entry", lambda: order.append("nvram"))
+    monkeypatch.setattr(inst, "_write_containers", lambda: order.append("containers"))
+    monkeypatch.setattr(inst, "_detect_windows_esp_uuid", lambda: None)
+
+    armed = []
+
+    class FakeEnroller:
+        def arm(self, has_windows):
+            order.append("arm")
+            armed.append(has_windows)
+            return True
+
+    inst._sb_enroller = FakeEnroller()
+    assert inst._place_ukis_and_render() is True
+    assert order[-1] == "arm"                       # arming is dead last
+    assert order.index("verify") < order.index("arm")
+    assert armed == [False]                          # no Windows → no --microsoft
+
+
+def test_place_ukis_arms_with_microsoft_for_separate_esp_windows(
+        tmp_path, mock_run_command, monkeypatch):
+    """Windows on ANY ESP (the all-ESP probe returns a UUID) arms WITH the MS CA
+    kept — the dual-boot regression the review caught when --microsoft was gated
+    on a target-ESP-only check."""
+    inst = _inst(tmp_path, uefi=True)
+    monkeypatch.setattr(inst, "_verify_uki_on_esp", lambda: True)
+    monkeypatch.setattr(inst, "_create_config", lambda d: True)
+    monkeypatch.setattr(inst, "_register_nvram_entry", lambda: None)
+    monkeypatch.setattr(inst, "_write_containers", lambda: None)
+    monkeypatch.setattr(inst, "_detect_windows_esp_uuid", lambda: "1234-ABCD")
+    armed = []
+
+    class FakeEnroller:
+        def arm(self, has_windows):
+            armed.append(has_windows)
+            return True
+
+    inst._sb_enroller = FakeEnroller()
+    assert inst._place_ukis_and_render() is True
+    assert armed == [True]                           # all-ESP Windows → --microsoft
+
+
 def test_place_ukis_aborts_when_uki_unverified(tmp_path, mock_run_command, monkeypatch):
     inst = _inst(tmp_path, uefi=True)
     rendered = []

@@ -57,13 +57,6 @@ class SecureBootEnroller:
         # 4-byte attribute prefix, then a single bool byte.
         return len(data) >= 5 and data[4] == 1
 
-    def _has_windows(self) -> bool:
-        """A Microsoft boot manager on the target ESP means we must keep the
-        Microsoft UEFI CA enrolled, or Windows (and signed option ROMs) stop
-        validating under our PK."""
-        return (self.mount_point / "boot" / "efi" / "EFI" / "Microsoft"
-                / "Boot" / "bootmgfw.efi").is_file()
-
     def generate_keys(self) -> bool:
         """Mint the per-box SB db keypair (sbctl, into the target) and a per-box
         PCR-11 signing keypair. Returns False only on a failure that would leave
@@ -113,22 +106,31 @@ class SecureBootEnroller:
             "PCRBanks=sha256\n"
         )
 
-    def enroll_platform_keys(self) -> bool:
-        """Enroll this box's PK/KEK/db into firmware. --microsoft keeps the MS
-        CA so option ROMs and a dual-boot Windows still validate. Only ever
-        called in Setup Mode."""
+    def arm(self, has_windows: bool) -> bool:
+        """The single IRREVERSIBLE step: enroll this box's PK/KEK/db into
+        firmware so Secure Boot is enforced from the next boot. Call ONLY after
+        the ENTIRE signed chain — the Limine copies AND every placed UKI — is
+        verified, so any upstream failure leaves Secure Boot off and the box
+        bootable. --microsoft keeps the MS CA when Windows is present on ANY ESP
+        (the caller probes all of them), or a dual-boot Windows stops booting."""
         cmd = SBCTL + ["enroll-keys", "--yes-this-might-brick-my-machine"]
-        if self._has_windows():
+        if has_windows:
             cmd.append("--microsoft")
         res = run_chroot(cmd, mount_point=str(self.mount_point))
         if not res.success:
-            logger.warning("sbctl enroll-keys failed (non-fatal): %s", res.stderr)
+            logger.error(
+                "Secure Boot: arming FAILED — keys are on disk and the chain is "
+                "signed, but the firmware did not accept them, so Secure Boot is "
+                "NOT active. The box boots normally; complete it with `shedman "
+                "secureboot enroll`."
+            )
             return False
         return True
 
     def sign_targets(self, targets: list[str]) -> None:
         """sbsign each Limine EFI copy with the box db key. Paths are on-host
-        paths under the mounted ESP; sbctl signs in place."""
+        paths under the mounted ESP; sbctl signs in place. Best-effort here —
+        verify_signed() is the hard gate that blocks arming on a failed sign."""
         for t in targets:
             if not Path(t).exists():
                 logger.warning("Secure Boot: sign target missing: %s", t)
@@ -138,36 +140,47 @@ class SecureBootEnroller:
             if not res.success:
                 logger.warning("sbctl sign failed for %s (non-fatal): %s", t, res.stderr)
 
-    def enroll(self, limine_copies: list[str]) -> bool:
-        """Provision + enroll keys and sign the Limine copies — only in Setup
-        Mode. Returns True on a clean BIOS / not-Setup-Mode skip or a fully
-        provisioned+enrolled box; False on any provisioning failure that left
-        Secure Boot inactive. Never raises and never aborts the install — the
-        box always boots — but a failed enrollment is logged LOUD, not swallowed
-        into a false "secured" claim."""
+    def verify_signed(self, targets: list[str]) -> bool:
+        """sbverify every Limine copy against the box db cert — the same
+        backstop uki-place.sh gives the UKIs. A copy that did not actually get
+        signed must block arming, or firmware rejects it at the next boot and
+        the box is unbootable under Secure Boot."""
+        for t in targets:
+            rel = t.replace(str(self.mount_point), "", 1)
+            res = run_chroot(["sbverify", "--cert", DB_CERT, rel],
+                             mount_point=str(self.mount_point))
+            if not res.success:
+                logger.error("Secure Boot: %s is not validly signed: %s", rel, res.stderr)
+                return False
+        return True
+
+    def provision(self, limine_copies: list[str]) -> bool:
+        """Mint keys, rewrite uki.conf to its signing form, and sign + VERIFY
+        the Limine EFI copies — everything EXCEPT the irreversible firmware
+        arming, which the caller does last via arm() once the UKIs are placed.
+        Returns True only when the box is in Setup Mode and every Limine copy is
+        signed and sbverify-confirmed (safe to arm); False means leave the chain
+        unsigned and NEVER arm. Best-effort: never raises, never aborts the
+        install — the box always boots."""
         if not self.uefi:
-            logger.info("Secure Boot: BIOS target, nothing to enroll")
-            return True
+            logger.info("Secure Boot: BIOS target, nothing to provision")
+            return False
         if not self.probe_setup_mode():
             logger.info(
                 "Secure Boot: firmware not in Setup Mode — leaving the boot "
                 "chain unsigned; finish with `shedman secureboot enroll` after "
                 "clearing the platform key"
             )
-            return True
+            return False
         if not self.generate_keys():
             return False
         self.rewrite_uki_conf()
-        enrolled = self.enroll_platform_keys()
-        # Sign regardless: the images are then ready for when enrollment is
-        # completed later, and an unenrolled signature is harmless (Secure Boot
-        # stays inactive until a platform key is set).
         self.sign_targets(limine_copies)
-        if not enrolled:
+        if not self.verify_signed(limine_copies):
             logger.error(
-                "Secure Boot: key ENROLLMENT FAILED — keys are on disk and the "
-                "images are signed, but the firmware did not accept the keys, so "
-                "Secure Boot is NOT active. The box boots normally; complete it "
-                "with `shedman secureboot enroll` from the installed system."
+                "Secure Boot: the Limine copies are not validly signed — NOT "
+                "arming Secure Boot, so the box stays bootable. Re-run `shedman "
+                "secureboot enroll` once resolved."
             )
-        return enrolled
+            return False
+        return True
