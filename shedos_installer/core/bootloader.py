@@ -91,24 +91,40 @@ class LimineInstaller:
             logger.info(f"Copying {bootx64_src} to {limine_dir / 'BOOTX64.EFI'}")
             shutil.copy2(bootx64_src, limine_dir / "BOOTX64.EFI")
 
-            if not self._create_config(limine_dir):
-                return False
+            # Provision + enroll this box's Secure Boot keys and sign the
+            # Limine copies now that they exist (Setup-Mode-only; a clean
+            # no-op otherwise). Must precede mkinitcpio -P in
+            # configure_mkinitcpio so uki.conf is in its signing form before
+            # the first UKI is built.
+            self._enroll_secureboot()
 
-            # ESP root is where Limine looks by default; the /EFI/limine/
-            # config alone is not enough.
-            esp_root = self.mount_point / "boot" / "efi"
-            if not self._create_config(esp_root):
-                return False
-
-            # Best-effort dual-boot + firmware registration; neither
-            # may fail the install.
+            # The Windows chainload entry must be on disk before the menu
+            # renders (the renderer appends it). The menu itself renders in
+            # configure_mkinitcpio, AFTER the UKIs are built and placed — a
+            # UEFI entry points at a UKI that has to already be on the ESP.
             self._setup_windows_chainload()
-            self._register_nvram_entry()
             return True
 
         except Exception as e:
             logger.exception(f"UEFI installation failed: {e}")
             return False
+
+    def _enroll_secureboot(self) -> None:
+        """Mint + enroll this box's Secure Boot keys, rewrite uki.conf to its
+        signing form, and sign the Limine EFI copies. Best-effort: a key-gen or
+        enroll failure leaves the box booting unsigned (Limine still
+        chainloads), never bricked. Only acts when firmware is in Setup Mode."""
+        from shedos_installer.core.secureboot import SecureBootEnroller
+
+        esp = self.mount_point / "boot" / "efi"
+        targets = [
+            str(esp / "EFI" / "BOOT" / "BOOTX64.EFI"),
+            str(esp / "EFI" / "limine" / "BOOTX64.EFI"),
+        ]
+        try:
+            SecureBootEnroller(str(self.mount_point), uefi=True).enroll(targets)
+        except Exception:
+            logger.exception("Secure Boot enrollment failed (non-fatal)")
 
     def _detect_windows_esp_uuid(self) -> Optional[str]:
         """Filesystem UUID of an ESP carrying the Windows boot manager,
@@ -203,7 +219,10 @@ class LimineInstaller:
         listing = run_command(["efibootmgr"])
         if listing.success:
             for line in listing.stdout.splitlines():
-                if line.startswith("Boot") and line.rstrip().endswith("ShedOS"):
+                stripped = line.rstrip()
+                if line.startswith("Boot") and (
+                        stripped.endswith("ShedOS")
+                        or stripped.endswith("ShedOS Recovery")):
                     bootnum = line[4:8]
                     run_command(["efibootmgr", "-b", bootnum, "-B"])
 
@@ -215,6 +234,18 @@ class LimineInstaller:
             logger.info(f"efibootmgr: registered ShedOS ({disk} part {part})")
         else:
             logger.warning(f"efibootmgr failed (non-fatal): {result.stderr}")
+
+        # A second firmware entry that boots straight into the fallback UKI, so
+        # a broken default kernel still has a way in next to the normal entry.
+        recovery = run_command([
+            "efibootmgr", "--create", "--disk", disk, "--part", part,
+            "--label", "ShedOS Recovery",
+            "--loader", r"\EFI\Linux\shedos-linux-zen-fallback.efi",
+        ])
+        if recovery.success:
+            logger.info("efibootmgr: registered ShedOS Recovery")
+        else:
+            logger.warning(f"efibootmgr recovery entry failed (non-fatal): {recovery.stderr}")
 
     def _install_bios(self, disk_device: str) -> bool:
         """Install Limine for BIOS systems.
@@ -422,6 +453,25 @@ class LimineInstaller:
             pass
         return None
 
+    def _strip_quiet_splash(self, cmdline: str) -> str:
+        """The fallback UKI shows boot detail; drop the two flash-suppression
+        tokens so a failing boot isn't hidden behind a silent splash."""
+        return " ".join(
+            t for t in cmdline.split() if t not in ("quiet", "splash")
+        )
+
+    def _write_kernel_cmdline(self) -> None:
+        """ukify bakes /etc/kernel/cmdline into the signed UKI, so it has to be
+        on disk before mkinitcpio -P runs. The -fallback file feeds the recovery
+        UKI (boot detail, no splash)."""
+        ek = self.mount_point / "etc" / "kernel"
+        ek.mkdir(parents=True, exist_ok=True)
+        cmdline = self._build_cmdline()
+        (ek / "cmdline").write_text(cmdline + "\n")
+        (ek / "cmdline-fallback").write_text(
+            self._strip_quiet_splash(cmdline) + "\n"
+        )
+
     def _create_config(self, config_dir: Path) -> bool:
         """Render Limine configuration via the packaged renderer.
 
@@ -545,6 +595,11 @@ class LimineInstaller:
             conf_path.write_text(content)
             logger.info(f"Updated mkinitcpio.conf with HOOKS=({' '.join(hooks)}) and FILES=({' '.join(files)})")
 
+            # ukify bakes /etc/kernel/cmdline into the signed UKI, so the
+            # cmdline must be on disk before mkinitcpio -P builds it. Harmless
+            # on BIOS (its UKI is built but unused).
+            self._write_kernel_cmdline()
+
             logger.info("Regenerating initramfs...")
             result = run_chroot(
                 ["mkinitcpio", "-P"],
@@ -573,20 +628,95 @@ class LimineInstaller:
             for f in required_initramfs:
                 logger.info(f"initramfs created at {self.mount_point / 'boot' / f}")
 
-            # Copy the freshly regenerated kernel + initramfs to the FAT
-            # boot volume (the ESP — BIOS installs boot from the same
-            # partition, since Limine reads only FAT/ISO9660). Must run
-            # AFTER mkinitcpio so it picks up the variant with our final
-            # HOOKS (LUKS + Plymouth).
+            # UEFI boots signed UKIs that Limine efi_chainloads; BIOS boots
+            # the raw kernel + initramfs Limine reads off the FAT volume.
+            if self.is_uefi:
+                return self._place_ukis_and_render()
+            # BIOS: copy the freshly regenerated kernel + initramfs to the FAT
+            # boot volume. Must run AFTER mkinitcpio so it picks up the variant
+            # with our final HOOKS (LUKS + Plymouth). The menu was already
+            # rendered in _install_bios.
             logger.info("Copying freshly generated kernels to the boot volume...")
             if not self._copy_kernels_to_esp():
                 logger.error("Failed to copy regenerated kernels to the boot volume")
                 return False
-
             return True
         except Exception as e:
             logger.exception(f"Failed to configure mkinitcpio: {e}")
             return False
+
+    def _place_ukis_and_render(self) -> bool:
+        """UEFI post-mkinitcpio: place the signed UKIs on the ESP, then render
+        the boot menu pointing at them and register firmware entries.
+
+        Ordering is load-bearing. The renderer (and build-uki.sh) discover the
+        ESP by finding a limine.conf on it, and the renderer emits a UEFI entry
+        only once its UKI is verified present — so on a fresh install, with no
+        config and no UKI yet, it would emit an empty menu. We seed a minimal
+        config first so both discover the ESP, place the UKIs, then render the
+        real menu over the seed."""
+        esp_root = self.mount_point / "boot" / "efi"
+        limine_dir = esp_root / "EFI" / "limine"
+
+        self._seed_esp_config()
+
+        logger.info("Placing the signed UKIs onto the ESP...")
+        placed = run_chroot(
+            ["/usr/lib/shedos/build-uki.sh"],
+            mount_point=str(self.mount_point),
+        )
+        if not placed.success:
+            logger.error("build-uki.sh failed: %s", placed.stderr)
+            return False
+        if not self._verify_uki_on_esp():
+            return False
+
+        # Render the real menu now that every entry's UKI is on the ESP. Both
+        # paths matter: /EFI/limine/ and the ESP root Limine searches by default.
+        if not self._create_config(limine_dir):
+            return False
+        if not self._create_config(esp_root):
+            return False
+
+        self._register_nvram_entry()
+        self._write_containers()
+        return True
+
+    def _seed_esp_config(self) -> None:
+        """Drop a minimal limine.conf on the ESP so build-uki.sh and the
+        renderer discover it on a fresh install (both key ESP discovery on an
+        existing config). The renderer overwrites this with the real menu."""
+        seed = self.mount_point / "boot" / "efi" / "limine.conf"
+        if seed.exists():
+            return
+        seed.parent.mkdir(parents=True, exist_ok=True)
+        seed.write_text("timeout: 3\n")
+
+    def _verify_uki_on_esp(self) -> bool:
+        """build-uki.sh reports success only when every installed pkgbase's UKI
+        is on the ESP; re-check linux-zen's default AND fallback here so a
+        silent placer regression can't pass — the recovery NVRAM entry points
+        at the fallback, so a missing fallback is a dead recovery path."""
+        uki_dir = self.mount_point / "boot" / "efi" / "EFI" / "Linux"
+        required = ["shedos-linux-zen.efi", "shedos-linux-zen-fallback.efi"]
+        missing = [f for f in required if not (uki_dir / f).is_file()]
+        if missing:
+            logger.error("UKI files missing from the ESP after build-uki.sh: %s", missing)
+            return False
+        return True
+
+    def _write_containers(self) -> None:
+        """Record the boot-unlocked LUKS containers so `shedman tpm2 enroll`
+        knows which devices to bind to the TPM. Root first, then the separate
+        encrypted swap when present. Nothing to write on an unencrypted box."""
+        if not self.luks_uuid:
+            return
+        sb = self.mount_point / "etc" / "shedos" / "secureboot"
+        sb.mkdir(parents=True, exist_ok=True)
+        lines = [f"/dev/disk/by-uuid/{self.luks_uuid}"]
+        if self.swap_luks_uuid:
+            lines.append(f"/dev/disk/by-uuid/{self.swap_luks_uuid}")
+        (sb / "containers").write_text("\n".join(lines) + "\n")
 
     def _copy_kernels_to_esp(self) -> bool:
         """Copy kernel and initramfs to ESP after mkinitcpio regeneration."""
