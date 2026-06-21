@@ -36,6 +36,7 @@ def mock_run_command(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     monkeypatch.setattr("shedos_installer.utils.hardware.run_command", mock)
     monkeypatch.setattr("shedos_installer.core.bootloader.run_command", mock)
     monkeypatch.setattr("shedos_installer.core.bootloader.run_chroot", mock)
+    monkeypatch.setattr("shedos_installer.core.secureboot.run_chroot", mock)
     return mock
 
 
