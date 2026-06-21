@@ -447,8 +447,14 @@ class LimineInstaller:
         cmdline = self._build_cmdline()
 
         # Path inside the chroot is just /boot, regardless of where
-        # mount_point is anchored on the host.
-        env_pairs = [f"SHEDOS_LIMINE_CMDLINE={cmdline}"]
+        # mount_point is anchored on the host. Pass the TARGET's firmware so the
+        # renderer picks efi_chainload vs protocol:linux from it, not from the
+        # chroot's own /sys/firmware/efi (wrong when building a cross-firmware
+        # image).
+        env_pairs = [
+            f"SHEDOS_LIMINE_CMDLINE={cmdline}",
+            f"SHEDOS_FIRMWARE={'uefi' if self.is_uefi else 'bios'}",
+        ]
         result = run_chroot(
             ["env", *env_pairs, "/usr/lib/shedos/render-limine-config.sh"],
             mount_point=str(self.mount_point),
