@@ -235,6 +235,27 @@ class LimineInstaller:
                     bootnum = line[4:8]
                     run_command(["efibootmgr", "-b", bootnum, "-B"])
 
+        # ORDER IS LOAD-BEARING: efibootmgr --create PREPENDS each entry to
+        # BootOrder, so creation order is the REVERSE of the desired boot order
+        # — whatever is created LAST leads. Register "ShedOS Recovery" FIRST and
+        # "ShedOS" LAST so a plain boot lands in Limine's menu, not straight into
+        # recovery. (The bug this fixes: recovery was created last → booted by
+        # default, bypassing the menu/rollback and the Plymouth splash.)
+        # A firmware entry that boots straight into the dedicated recovery UKI,
+        # so a broken default still has a way in — only when it is on the ESP.
+        if (esp / "EFI" / "Linux" / "shedos-recovery.efi").exists():
+            recovery = run_command([
+                "efibootmgr", "--create", "--disk", disk, "--part", part,
+                "--label", "ShedOS Recovery",
+                "--loader", r"\EFI\Linux\shedos-recovery.efi",
+            ])
+            if recovery.success:
+                logger.info("efibootmgr: registered ShedOS Recovery")
+            else:
+                logger.warning(f"efibootmgr recovery entry failed (non-fatal): {recovery.stderr}")
+        else:
+            logger.warning("shedos-recovery.efi not on the ESP — skipping the recovery NVRAM entry")
+
         result = run_command([
             "efibootmgr", "--create", "--disk", disk, "--part", part,
             "--label", "ShedOS", "--loader", r"\EFI\limine\BOOTX64.EFI",
@@ -243,18 +264,6 @@ class LimineInstaller:
             logger.info(f"efibootmgr: registered ShedOS ({disk} part {part})")
         else:
             logger.warning(f"efibootmgr failed (non-fatal): {result.stderr}")
-
-        # A second firmware entry that boots straight into the fallback UKI, so
-        # a broken default kernel still has a way in next to the normal entry.
-        recovery = run_command([
-            "efibootmgr", "--create", "--disk", disk, "--part", part,
-            "--label", "ShedOS Recovery",
-            "--loader", r"\EFI\Linux\shedos-linux-zen-fallback.efi",
-        ])
-        if recovery.success:
-            logger.info("efibootmgr: registered ShedOS Recovery")
-        else:
-            logger.warning(f"efibootmgr recovery entry failed (non-fatal): {recovery.stderr}")
 
     def _install_bios(self, disk_device: str) -> bool:
         """Install Limine for BIOS systems.
@@ -679,6 +688,18 @@ class LimineInstaller:
             return False
         if not self._verify_uki_on_esp():
             return False
+
+        # Build + place the dedicated recovery UKI (shedos-recovery.efi) so a
+        # fresh install has it for the renderer's recovery entry and the firmware
+        # recovery NVRAM entry. Non-fatal: it is a safety net, not the primary
+        # boot path, and the 94 hook also rebuilds it on every kernel txn.
+        recovery = run_chroot(
+            ["/usr/lib/shedos/build-recovery-uki.sh"],
+            mount_point=str(self.mount_point),
+        )
+        if not recovery.success:
+            logger.warning("build-recovery-uki.sh failed (non-fatal): %s",
+                           recovery.stderr)
 
         # Render the real menu now that every entry's UKI is on the ESP. Both
         # paths matter: /EFI/limine/ and the ESP root Limine searches by default.

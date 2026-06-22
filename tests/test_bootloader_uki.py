@@ -75,6 +75,7 @@ def test_place_ukis_renders_only_after_verify(tmp_path, mock_run_command, monkey
     assert inst._place_ukis_and_render() is True
     seq = [" ".join(c.args[0]) for c in mock_run_command.call_args_list]
     assert any("build-uki.sh" in c for c in seq)        # placer ran
+    assert any("build-recovery-uki.sh" in c for c in seq)   # dedicated recovery UKI built
     assert len(rendered) == 2                            # both ESP config dirs
     assert (tmp_path / "boot" / "efi" / "limine.conf").exists()   # seeded first
 
@@ -118,8 +119,9 @@ def test_place_ukis_aborts_when_uki_unverified(tmp_path, mock_run_command, monke
     assert rendered == []   # but the menu never rendered without verified UKIs
 
 
-def test_register_nvram_adds_recovery_entry(tmp_path, monkeypatch):
-    inst = _inst(tmp_path, uefi=True)
+def _nvram_capture(inst, monkeypatch):
+    """Stub the device probes + efibootmgr; return the (label, loader) of each
+    --create in creation order."""
     created = []
 
     def fake_run(cmd, **kw):
@@ -132,10 +134,33 @@ def test_register_nvram_adds_recovery_entry(tmp_path, monkeypatch):
         if cmd == ["efibootmgr"]:
             return make_result(stdout="")
         if "--create" in cmd:
-            created.append(cmd[cmd.index("--label") + 1])
+            created.append((cmd[cmd.index("--label") + 1],
+                            cmd[cmd.index("--loader") + 1]))
         return make_result()
 
     monkeypatch.setattr("shedos_installer.core.bootloader.run_command", fake_run)
     inst._register_nvram_entry()
-    assert "ShedOS" in created
-    assert "ShedOS Recovery" in created
+    return created
+
+
+def test_register_nvram_recovery_first_so_shedos_leads(tmp_path, monkeypatch):
+    """efibootmgr --create PREPENDS, so creation order is the reverse of
+    BootOrder: Recovery must be created BEFORE ShedOS so the normal Limine entry
+    leads (the boot-order bug was recovery created last → booted by default).
+    The recovery entry targets the dedicated shedos-recovery.efi, not a kernel
+    fallback, and only registers when that image is on the ESP."""
+    inst = _inst(tmp_path, uefi=True)
+    rec = tmp_path / "boot" / "efi" / "EFI" / "Linux" / "shedos-recovery.efi"
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_bytes(b"MZ")
+    created = _nvram_capture(inst, monkeypatch)
+    assert [label for label, _ in created] == ["ShedOS Recovery", "ShedOS"]
+    assert dict(created)["ShedOS Recovery"] == r"\EFI\Linux\shedos-recovery.efi"
+
+
+def test_register_nvram_skips_recovery_when_image_absent(tmp_path, monkeypatch):
+    """No shedos-recovery.efi on the ESP → no dead recovery NVRAM entry pointing
+    at a missing file; ShedOS still registers."""
+    inst = _inst(tmp_path, uefi=True)
+    created = _nvram_capture(inst, monkeypatch)
+    assert [label for label, _ in created] == ["ShedOS"]
