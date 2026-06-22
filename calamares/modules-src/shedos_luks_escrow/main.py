@@ -14,6 +14,7 @@ loops forever on any container the recovery key can't open. Enrolling only the
 root container strands a recovery unlock at the swap prompt. No-op when
 encryption was opted out."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -23,6 +24,39 @@ import libcalamares
 
 def pretty_name():
     return "Enrolling recovery key"
+
+
+def _active_slots(device):
+    """The set of active keyslot indices on a LUKS2 device, or empty on error."""
+    out = subprocess.run(
+        ["cryptsetup", "luksDump", "--dump-json-metadata", device],
+        capture_output=True, text=True,
+    )
+    try:
+        return set((json.loads(out.stdout).get("keyslots") or {}).keys())
+    except (ValueError, AttributeError):
+        return set()
+
+
+def _tag_slot(device, slot):
+    """Label a slot shedos-recovery with a LUKS2 token so `shedman key` finds the
+    recovery slots directly. cryptsetup token import reads the JSON from a file,
+    not a pipe. Best-effort: a failure just leaves the slot untagged — the key
+    still unlocks, and the verb backfills the token on first use."""
+    payload = '{{"type":"shedos-recovery","keyslots":["{}"]}}'.format(slot)
+    fd, jf = tempfile.mkstemp(prefix="shedos-tok-", dir="/run")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload.encode())
+        subprocess.run(
+            ["cryptsetup", "token", "import", "--json-file={}".format(jf), device],
+            capture_output=True,
+        )
+    finally:
+        try:
+            os.unlink(jf)
+        except OSError:
+            pass
 
 
 def run():
@@ -69,6 +103,7 @@ def run():
             # authorizes the add via stdin. No trailing newline: the enrolled
             # key must byte-match what the user types at the boot prompt.
             fd, keyfile = tempfile.mkstemp(prefix="shedos-recovery-", dir="/run")
+            before = _active_slots(device)
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(form.encode())
@@ -87,4 +122,9 @@ def run():
                 detail = proc.stderr.decode(errors="replace").strip()
                 return ("Recovery key enrollment failed",
                         detail or "cryptsetup luksAddKey failed on {}".format(device))
+
+            # Label the slot just added so `shedman key` recognizes the recovery
+            # key without probing every slot; the verb backfills any this misses.
+            for slot in _active_slots(device) - before:
+                _tag_slot(device, slot)
     return None

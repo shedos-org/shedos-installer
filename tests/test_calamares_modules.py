@@ -8,6 +8,7 @@ import-under-test fires.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -544,24 +545,43 @@ def test_luks_escrow_enrolls_recovery_key_on_every_container(
     monkeypatch.setattr(mod.tempfile, "mkstemp",
                         lambda **kw: real_mkstemp(dir=str(tmp_path)))
     calls = []
+    # Track slots per device so each luksAddKey makes a new slot appear; the
+    # module's before/after diff then finds exactly the slot it just added.
+    state: dict = {}
 
-    def fake_run(argv, input=None, capture_output=False):
+    def fake_run(argv, input=None, **kwargs):
         calls.append({"argv": argv, "input": input})
-        return types.SimpleNamespace(returncode=0, stderr=b"")
+        if "luksDump" in argv:
+            st = state.setdefault(argv[-1], {"slots": {"0"}, "n": 1})
+            body = json.dumps({"keyslots": {s: {} for s in sorted(st["slots"])}})
+            return types.SimpleNamespace(returncode=0, stderr=b"", stdout=body)
+        if "luksAddKey" in argv:
+            st = state.setdefault(argv[-2], {"slots": {"0"}, "n": 1})
+            st["slots"].add(str(st["n"]))
+            st["n"] += 1
+        return types.SimpleNamespace(returncode=0, stderr=b"", stdout="")
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     assert mod.run() is None
+
+    adds = [c for c in calls if "luksAddKey" in c["argv"]]
+    imports = [c for c in calls if "token" in c["argv"] and "import" in c["argv"]]
     # Enrolled on the root AND the swap container — a recovery unlock has to
     # open every device the initramfs prompts for at boot, not just root.
-    devices = {c["argv"][-2] for c in calls}
-    assert devices == {"/dev/vda2", "/dev/vda3"}
+    assert {c["argv"][-2] for c in adds} == {"/dev/vda2", "/dev/vda3"}
     # Four spellings (upper/lower x dashed/undashed) per container.
-    assert len(calls) == 8
-    for c in calls:
+    assert len(adds) == 8
+    for c in adds:
         assert c["argv"][:3] == ["cryptsetup", "luksAddKey", "--key-file=-"]
         # The passphrase is fed plaintext on stdin, never on argv.
         assert c["input"] == pw.encode()
         assert pw not in " ".join(c["argv"])
+    # Every newly-added slot gets a shedos-recovery LUKS2 token, imported from a
+    # file (cryptsetup token import won't read a pipe), on each container.
+    assert len(imports) == 8
+    for c in imports:
+        assert any(a.startswith("--json-file=") for a in c["argv"])
+        assert c["argv"][-1] in ("/dev/vda2", "/dev/vda3")
 
 
 def test_luks_escrow_noop_when_encryption_opted_out(fake_libcalamares, monkeypatch):
