@@ -119,6 +119,22 @@ def test_place_ukis_aborts_when_uki_unverified(tmp_path, mock_run_command, monke
     assert rendered == []   # but the menu never rendered without verified UKIs
 
 
+def test_register_nvram_skipped_for_offline_image_build(tmp_path, mock_run_command, monkeypatch):
+    """Off-box image builds (build-base-image.sh) pass register_nvram=False so
+    _place_ukis_and_render never calls _register_nvram_entry — it runs efibootmgr
+    on the host, which would write bogus entries into a UEFI build host's
+    firmware. The default still registers."""
+    for flag, want in ((False, []), (True, ["nvram"])):
+        inst = _inst(tmp_path, uefi=True, register_nvram=flag)
+        monkeypatch.setattr(inst, "_verify_uki_on_esp", lambda: True)
+        monkeypatch.setattr(inst, "_create_config", lambda d: True)
+        monkeypatch.setattr(inst, "_write_containers", lambda: None)
+        calls = []
+        monkeypatch.setattr(inst, "_register_nvram_entry", lambda: calls.append("nvram"))
+        assert inst._place_ukis_and_render() is True
+        assert calls == want
+
+
 def _nvram_capture(inst, monkeypatch):
     """Stub the device probes + efibootmgr; return the (label, loader) of each
     --create in creation order."""

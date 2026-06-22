@@ -4,12 +4,20 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
 from shedos_installer.utils.command import run_command, run_chroot
 from shedos_installer.utils.hardware import is_uefi
 
 logger = logging.getLogger(__name__)
+
+
+class _SecureBootArmer(Protocol):
+    """The single method _place_ukis_and_render calls on a provisioned enroller.
+    A Protocol so the arm-last test can inject a double without the concrete
+    SecureBootEnroller, which is imported lazily inside _enroll_secureboot."""
+
+    def arm(self) -> bool: ...
 
 
 class LimineInstaller:
@@ -24,11 +32,14 @@ class LimineInstaller:
         uefi: Optional[bool] = None,
         swap_luks_uuid: Optional[str] = None,
         swap_luks_mapper: Optional[str] = None,
+        register_nvram: bool = True,
     ) -> None:
         """Initialize Limine installer.
 
         uefi None detects the firmware from the running host; pass it
         explicitly when building an image whose firmware isn't the host's.
+        register_nvram False skips firmware boot-entry registration for
+        off-box image builds (see self.register_nvram).
         """
         self.mount_point = Path(mount_point)
         self.root_uuid = root_uuid
@@ -46,7 +57,13 @@ class LimineInstaller:
         # Set to a provisioned SecureBootEnroller by _enroll_secureboot when the
         # box is in Setup Mode and the Limine copies verify; _place_ukis_and_
         # render arms it LAST, once the UKIs are signed and placed.
-        self._sb_enroller = None
+        self._sb_enroller: Optional[_SecureBootArmer] = None
+        # Off-box image builds (build-base-image.sh) pass False:
+        # _register_nvram_entry runs efibootmgr on the HOST, not the chroot, so
+        # on a UEFI build host it would write bogus entries into the host's
+        # firmware. A QEMU image boots the default \EFI\BOOT path with no NVRAM
+        # entry, so skipping it costs nothing.
+        self.register_nvram = register_nvram
 
         logger.info(f"LimineInstaller init: UEFI={self.is_uefi}, RootUUID={self.root_uuid}, LuksUUID={self.luks_uuid}")
 
@@ -708,7 +725,8 @@ class LimineInstaller:
         if not self._create_config(esp_root):
             return False
 
-        self._register_nvram_entry()
+        if self.register_nvram:
+            self._register_nvram_entry()
         self._write_containers()
 
         # Arm Secure Boot LAST — only now that the ENTIRE signed chain (the
