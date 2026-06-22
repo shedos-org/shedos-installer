@@ -98,12 +98,12 @@ class SecureBootEnroller:
             f"Stub={STUB}\n"
             f"SecureBootPrivateKey={DB_KEY}\n"
             f"SecureBootCertificate={DB_CERT}\n"
+            "PCRBanks=sha256\n"
             "\n"
             "[PCRSignature:initrd]\n"
             f"PCRPrivateKey=/{PCR_DIR}/pcr-private.pem\n"
             f"PCRPublicKey=/{PCR_DIR}/pcr-public.pem\n"
             "Phases=enter-initrd\n"
-            "PCRBanks=sha256\n"
         )
 
     def arm(self) -> bool:
