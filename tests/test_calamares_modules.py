@@ -171,6 +171,49 @@ def test_gitconfig_returns_none_when_username_missing(fake_libcalamares):
     fake_libcalamares.utils.warning.assert_called()
 
 
+# ─── shedos_recovery_stash ──────────────────────────────────────────
+
+
+def test_recovery_stash_writes_key_for_the_tour(fake_libcalamares, tmp_path):
+    """The install-time key lands at the target stash, wheel-readable (0660) in a
+    0755 dir, so the first-login tour can read + shred it."""
+    target = tmp_path / "target"
+    target.mkdir()
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "shedos_recovery_key": "PRNDW-EWGMR-AAAAA",
+        "rootMountPoint": str(target),
+    }.get(k)
+
+    mod = _load_module(
+        "shedos_recovery_stash_main",
+        MODULES_SRC / "shedos_recovery_stash/main.py",
+    )
+    assert mod.run() is None
+
+    stash = target / "var/lib/shedos/encrypt/recovery-key"
+    assert stash.read_text() == "PRNDW-EWGMR-AAAAA\n"
+    assert (stash.stat().st_mode & 0o777) == 0o660
+    assert (stash.parent.stat().st_mode & 0o777) == 0o755
+    # chgrp runs in the target chroot (mocked here), so the group is not asserted —
+    # only that the stash sets it.
+    fake_libcalamares.utils.target_env_call.assert_called_once()
+
+
+def test_recovery_stash_noop_without_key(fake_libcalamares, tmp_path):
+    """Encryption opted out → no key in globalstorage → return None, write nothing."""
+    target = tmp_path / "target"
+    target.mkdir()
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "rootMountPoint": str(target),
+    }.get(k)
+    mod = _load_module(
+        "shedos_recovery_stash_main_noop",
+        MODULES_SRC / "shedos_recovery_stash/main.py",
+    )
+    assert mod.run() is None
+    assert not (target / "var/lib/shedos/encrypt/recovery-key").exists()
+
+
 # ─── shedos_limine ──────────────────────────────────────────────────
 
 

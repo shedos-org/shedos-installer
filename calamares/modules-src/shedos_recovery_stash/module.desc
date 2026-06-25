@@ -1,0 +1,8 @@
+# ShedOS recovery-key first-login stash.
+# Writes the install-time recovery key (shown + acknowledged at the
+# recoverykeyq step) to the target so the first-boot tour shows it once.
+type: job
+name: shedos_recovery_stash
+interface: python
+script: main.py
+weight: 1
