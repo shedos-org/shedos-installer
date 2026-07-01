@@ -213,6 +213,14 @@ def nvidia_open_supported(gpu: "GpuInfo") -> bool:
     return gpu.nvidia_series != "Pascal/Maxwell"
 
 
+def should_install_nvidia(gpus: list["GpuInfo"]) -> bool:
+    """Whether to install the nvidia stack and enable its services: any present
+    GPU the open kernel modules can drive. The driver rides every install via the
+    live clone, so a supported card always wants the matching suspend/resume
+    services — there is no profile gate."""
+    return any(nvidia_open_supported(gpu) for gpu in gpus)
+
+
 def detect_other_os() -> list[dict[str, str]]:
     """Detect other operating systems for dual-boot."""
     other_os: list[dict[str, str]] = []

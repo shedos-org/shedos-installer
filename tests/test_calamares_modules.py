@@ -299,14 +299,22 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
 # ─── shedos_nvidia ──────────────────────────────────────────────────
 
 
-def test_nvidia_skipped_when_globalstorage_false(fake_libcalamares):
-    """shedos_install_nvidia=False → run() exits early with None."""
-    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
-        "shedos_install_nvidia": False,
-    }.get(k)
+def _nv_gpu():
+    from shedos_installer.utils.hardware import GpuInfo
+    return GpuInfo(
+        vendor="NVIDIA", model="RTX", pci_id="10de:2860", driver="nvidia",
+        is_nvidia=True, nvidia_series="Turing",
+    )
+
+
+def test_nvidia_skipped_when_no_supported_gpu(fake_libcalamares, monkeypatch):
+    """No NVIDIA GPU the open modules can drive → run() exits early with None.
+    The gate is the GPU itself now, not a globalstorage key set by another
+    module that runs later."""
     mod = _load_module(
         "shedos_nvidia_main_skip", MODULES_SRC / "shedos_nvidia/main.py",
     )
+    monkeypatch.setattr(mod, "get_gpus", lambda: [])
     assert mod.run() is None
     # Should log a debug saying it was skipped, not invoke any commands.
     fake_libcalamares.utils.debug.assert_called()
@@ -317,7 +325,6 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
 ):
     """nvidia.txt missing → use the hardcoded fallback list and warn."""
     fake_libcalamares.globalstorage.value.side_effect = lambda k: {
-        "shedos_install_nvidia": True,
         "rootMountPoint": str(tmp_path),
     }.get(k)
 
@@ -326,7 +333,7 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
         MODULES_SRC / "shedos_nvidia/main.py",
     )
     monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "definitely-missing")
-    monkeypatch.setattr(mod, "get_gpus", lambda: [])
+    monkeypatch.setattr(mod, "get_gpus", lambda: [_nv_gpu()])
 
     captured = []
 
@@ -352,6 +359,39 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
     )
     assert "nvidia-open-dkms" in pacman_cmd
     assert "nvidia-utils" in pacman_cmd
+
+
+def test_nvidia_enables_suspend_services_when_supported(
+    fake_libcalamares, monkeypatch, tmp_path,
+):
+    """A supported NVIDIA GPU → the suspend/hibernate/resume services get
+    enabled. They were dead before because the install gate never fired."""
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "rootMountPoint": str(tmp_path),
+    }.get(k)
+
+    mod = _load_module(
+        "shedos_nvidia_main_services",
+        MODULES_SRC / "shedos_nvidia/main.py",
+    )
+    monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "definitely-missing")
+    monkeypatch.setattr(mod, "get_gpus", lambda: [_nv_gpu()])
+
+    enabled = []
+
+    def fake_run_chroot(cmd, **kw):
+        from shedos_installer.utils.command import CommandResult
+        if cmd[:2] == ["systemctl", "enable"]:
+            enabled.append(cmd[2])
+        return CommandResult(returncode=0, stdout="", stderr="", success=True)
+
+    monkeypatch.setattr(mod, "run_chroot", fake_run_chroot)
+    assert mod.run() is None
+    assert enabled == [
+        "nvidia-suspend.service",
+        "nvidia-hibernate.service",
+        "nvidia-resume.service",
+    ]
 
 
 # ─── shedos_finalize ────────────────────────────────────────────────

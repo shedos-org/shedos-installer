@@ -3,8 +3,7 @@
 
 """Install nvidia-open-dkms + companions in the target root and enable
 nvidia-{suspend,hibernate,resume}.service so suspend works on first
-boot. Skipped entirely when shedos_install_nvidia globalstorage key is
-falsy."""
+boot. Skipped when no installed GPU is driveable by the open modules."""
 
 import sys
 from pathlib import Path
@@ -16,7 +15,11 @@ sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.config import PACKAGE_DIR
 from shedos_installer.utils.command import run_chroot
-from shedos_installer.utils.hardware import get_gpus, nvidia_open_supported
+from shedos_installer.utils.hardware import (
+    get_gpus,
+    nvidia_open_supported,
+    should_install_nvidia,
+)
 
 
 def pretty_name():
@@ -52,10 +55,9 @@ def _note_legacy_gpu():
 
 
 def run():
-    install_nvidia = libcalamares.globalstorage.value("shedos_install_nvidia")
-
-    if not install_nvidia:
-        libcalamares.utils.debug("NVIDIA installation check: shedos_install_nvidia is False/None")
+    gpus = get_gpus()
+    if not should_install_nvidia(gpus):
+        libcalamares.utils.debug("No NVIDIA GPU the open modules can drive — skipping")
         _note_legacy_gpu()
         return None
 
@@ -133,7 +135,6 @@ def run():
         else:
             libcalamares.utils.warning(f"Could not enable {service}")
 
-    gpus = get_gpus()
     for gpu in gpus:
         if gpu.is_nvidia:
             libcalamares.utils.debug(f"NVIDIA GPU: {gpu.model}")

@@ -30,3 +30,15 @@ def test_nvidia_open_unknown_series_assumed_new():
 
     assert nvidia_open_supported(_gpu(None))
     assert not nvidia_open_supported(_gpu(None, is_nvidia=False))
+
+
+def test_should_install_nvidia_gates_on_gpu_support_only():
+    from shedos_installer.utils.hardware import should_install_nvidia
+
+    # Any GPU the open modules can drive → yes, even alongside an iGPU.
+    assert should_install_nvidia([_gpu("Turing")])
+    assert should_install_nvidia([_gpu(None, is_nvidia=False), _gpu("Ampere")])
+    # Nothing supported → no. No profile condition is involved.
+    assert not should_install_nvidia([_gpu("Pascal/Maxwell")])
+    assert not should_install_nvidia([_gpu(None, is_nvidia=False)])
+    assert not should_install_nvidia([])

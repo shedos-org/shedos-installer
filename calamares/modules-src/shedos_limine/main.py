@@ -18,7 +18,7 @@ INSTALLER_ROOT = Path("/opt/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.core.bootloader import LimineInstaller
-from shedos_installer.utils.hardware import get_gpus, nvidia_open_supported, is_uefi
+from shedos_installer.utils.hardware import get_gpus, should_install_nvidia, is_uefi
 
 
 def pretty_name():
@@ -137,10 +137,7 @@ def run():
     # installing it would ship a driver that refuses to bind the GPU.
     # Those systems boot on nouveau/modesetting and shedos_nvidia
     # leaves a note explaining the AUR legacy path.
-    nvidia_supported = any(nvidia_open_supported(gpu) for gpu in gpus)
-
-    profile = libcalamares.globalstorage.value("shedos_profile")
-    install_nvidia = nvidia_supported and profile in ["desktop", "developer", "full"]
+    install_nvidia = should_install_nvidia(gpus)
 
     libcalamares.utils.debug(f"NVIDIA detected: {has_nvidia}")
     libcalamares.utils.debug(f"Install NVIDIA drivers: {install_nvidia}")
@@ -165,8 +162,5 @@ def run():
         return ("mkinitcpio configuration failed", "Failed to configure mkinitcpio")
 
     libcalamares.utils.debug("mkinitcpio configured and initramfs regenerated")
-
-    libcalamares.globalstorage.insert("shedos_install_nvidia", install_nvidia)
-    libcalamares.globalstorage.insert("shedos_has_nvidia", has_nvidia)
 
     return None
