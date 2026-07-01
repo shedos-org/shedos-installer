@@ -48,6 +48,7 @@ class GpuInfo:
     driver: str
     is_nvidia: bool
     nvidia_series: Optional[str]  # e.g., "GeForce RTX 30", "GeForce GTX 10"
+    pci_addr: str = ""            # PCI bus address, e.g. "0000:01:00.0"
 
 
 def get_disks() -> list[DiskInfo]:
@@ -138,7 +139,7 @@ def get_gpus() -> list[GpuInfo]:
     gpus: list[GpuInfo] = []
 
     # Use lspci to find GPUs
-    result = run_command(["lspci", "-nn"])
+    result = run_command(["lspci", "-Dnn"])
     if not result.success:
         return gpus
 
@@ -153,6 +154,7 @@ def get_gpus() -> list[GpuInfo]:
     for line in result.stdout.splitlines():
         match = gpu_pattern.search(line)
         if match:
+            pci_addr = match.group(1)
             description = match.group(2)
             vendor_device = match.group(3)
 
@@ -195,6 +197,7 @@ def get_gpus() -> list[GpuInfo]:
                 driver=driver,
                 is_nvidia=is_nvidia,
                 nvidia_series=nvidia_series,
+                pci_addr=pci_addr,
             ))
             logger.debug(f"Found GPU: {vendor} - {description}")
 
@@ -221,6 +224,50 @@ def should_install_nvidia(gpus: list["GpuInfo"]) -> bool:
     live clone, so a supported card always wants the matching suspend/resume
     services — there is no profile gate."""
     return any(nvidia_open_supported(gpu) for gpu in gpus)
+
+
+def gpu_topology(gpus: list["GpuInfo"]) -> str:
+    """The GPU layout that decides the display env: 'hybrid' when an nvidia dGPU
+    sits alongside an Intel/AMD GPU (Optimus), 'nvidia-only' when nvidia is the
+    sole GPU, else 'other'."""
+    has_nvidia = any(g.is_nvidia for g in gpus)
+    has_other = any(not g.is_nvidia for g in gpus)
+    if has_nvidia and has_other:
+        return "hybrid"
+    if has_nvidia:
+        return "nvidia-only"
+    return "other"
+
+
+def gpu_env_lines(gpus: list["GpuInfo"]) -> list[str]:
+    """Lines for /etc/shedos/gpu-env.sh, sourced by the session launcher before
+    Hyprland starts (AQ_DRM_DEVICES is read at backend init, too early for the
+    Hyprland `env` config). Empty for a single Intel/AMD GPU.
+
+    Hybrid keeps the iGPU primary — the dGPU is offloaded per-app with prime-run,
+    and the global nvidia env is deliberately omitted since it breaks iGPU VAAPI.
+    nvidia-only makes nvidia the render GPU."""
+    def node(g: "GpuInfo") -> str:
+        return f"/dev/dri/by-path/pci-{g.pci_addr}-card"
+
+    topo = gpu_topology(gpus)
+    if topo == "hybrid":
+        igpu = next(g for g in gpus if not g.is_nvidia)
+        dgpu = next(g for g in gpus if g.is_nvidia)
+        return [
+            "# Optimus: Hyprland renders on the integrated GPU; run an app on the",
+            "# NVIDIA GPU with `prime-run <app>`.",
+            f"export AQ_DRM_DEVICES={node(igpu)}:{node(dgpu)}",
+        ]
+    if topo == "nvidia-only":
+        nv = next(g for g in gpus if g.is_nvidia)
+        return [
+            f"export AQ_DRM_DEVICES={node(nv)}",
+            "export GBM_BACKEND=nvidia-drm",
+            "export __GLX_VENDOR_LIBRARY_NAME=nvidia",
+            "export LIBVA_DRIVER_NAME=nvidia",
+        ]
+    return []
 
 
 def detect_other_os() -> list[dict[str, str]]:

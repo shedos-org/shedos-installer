@@ -394,6 +394,40 @@ def test_nvidia_enables_suspend_services_when_supported(
     ]
 
 
+def test_nvidia_writes_hybrid_gpu_env(fake_libcalamares, monkeypatch, tmp_path):
+    """A hybrid Optimus box gets /etc/uwsm/env with an Intel-primary
+    AQ_DRM_DEVICES and no global nvidia block (which would break iGPU VAAPI)."""
+    from shedos_installer.utils.hardware import GpuInfo
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "rootMountPoint": str(tmp_path),
+    }.get(k)
+
+    mod = _load_module(
+        "shedos_nvidia_main_gpuenv", MODULES_SRC / "shedos_nvidia/main.py",
+    )
+    igpu = GpuInfo(vendor="Intel", model="UHD", pci_id="8086:9bc4",
+                   driver="i915", is_nvidia=False, nvidia_series=None,
+                   pci_addr="0000:00:02.0")
+    dgpu = GpuInfo(vendor="NVIDIA", model="RTX", pci_id="10de:2860",
+                   driver="nvidia", is_nvidia=True, nvidia_series="Turing",
+                   pci_addr="0000:01:00.0")
+    monkeypatch.setattr(mod, "get_gpus", lambda: [igpu, dgpu])
+    monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "missing")
+
+    def fake_run_chroot(cmd, **kw):
+        from shedos_installer.utils.command import CommandResult
+        return CommandResult(returncode=0, stdout="", stderr="", success=True)
+
+    monkeypatch.setattr(mod, "run_chroot", fake_run_chroot)
+    assert mod.run() is None
+
+    env = (tmp_path / "etc/uwsm/env").read_text()
+    assert ("AQ_DRM_DEVICES=/dev/dri/by-path/pci-0000:00:02.0-card:"
+            "/dev/dri/by-path/pci-0000:01:00.0-card") in env
+    assert "GBM_BACKEND" not in env
+    assert "prime-run" in env
+
+
 # ─── shedos_finalize ────────────────────────────────────────────────
 
 

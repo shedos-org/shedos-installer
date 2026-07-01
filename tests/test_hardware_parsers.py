@@ -174,3 +174,13 @@ def test_get_gpus_ignores_non_gpu_controllers(monkeypatch: pytest.MonkeyPatch) -
                         lambda *a, **kw: make_result(stdout=sample))
     gpus = get_gpus()
     assert [g.vendor for g in gpus] == ["NVIDIA"]
+
+
+def test_get_gpus_captures_pci_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    # lspci -Dnn gives the domain-qualified address the DRM by-path needs.
+    sample = ("0000:01:00.0 3D controller [0302]: NVIDIA Corporation TU117M "
+              "[GeForce GTX 1650 Mobile] [10de:1f99]\n")
+    monkeypatch.setattr("shedos_installer.utils.hardware.run_command",
+                        lambda *a, **kw: make_result(stdout=sample))
+    gpus = get_gpus()
+    assert gpus[0].pci_addr == "0000:01:00.0"

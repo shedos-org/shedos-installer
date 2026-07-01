@@ -17,6 +17,7 @@ from shedos_installer.config import PACKAGE_DIR
 from shedos_installer.utils.command import run_chroot
 from shedos_installer.utils.hardware import (
     get_gpus,
+    gpu_env_lines,
     nvidia_open_supported,
     should_install_nvidia,
 )
@@ -140,6 +141,19 @@ def run():
             libcalamares.utils.debug(f"NVIDIA GPU: {gpu.model}")
             if gpu.nvidia_series:
                 libcalamares.utils.debug(f"Series: {gpu.nvidia_series}")
+
+    # The session GPU env uwsm sources before Hyprland: on Optimus this keeps the
+    # integrated GPU primary and offloads per-app via prime-run; on a pure nvidia
+    # box it makes nvidia the render GPU. Empty topologies never reach here.
+    env_lines = gpu_env_lines(gpus)
+    if env_lines:
+        try:
+            uwsm_env = Path(root_mount_point) / "etc/uwsm/env"
+            uwsm_env.parent.mkdir(parents=True, exist_ok=True)
+            uwsm_env.write_text("\n".join(env_lines) + "\n")
+            libcalamares.utils.debug(f"Wrote GPU env to {uwsm_env}")
+        except Exception as exc:
+            libcalamares.utils.warning(f"Could not write GPU env: {exc}")
 
     libcalamares.utils.debug("NVIDIA driver configuration complete")
 

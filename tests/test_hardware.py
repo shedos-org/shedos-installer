@@ -1,6 +1,6 @@
 
 
-def _gpu(series, is_nvidia=True):
+def _gpu(series, is_nvidia=True, pci_addr=""):
     from shedos_installer.utils.hardware import GpuInfo
     return GpuInfo(
         vendor="NVIDIA" if is_nvidia else "AMD",
@@ -9,6 +9,7 @@ def _gpu(series, is_nvidia=True):
         driver="nvidia" if is_nvidia else "amdgpu",
         is_nvidia=is_nvidia,
         nvidia_series=series,
+        pci_addr=pci_addr,
     )
 
 
@@ -42,3 +43,41 @@ def test_should_install_nvidia_gates_on_gpu_support_only():
     assert not should_install_nvidia([_gpu("Pascal/Maxwell")])
     assert not should_install_nvidia([_gpu(None, is_nvidia=False)])
     assert not should_install_nvidia([])
+
+
+def test_gpu_topology():
+    from shedos_installer.utils.hardware import gpu_topology
+
+    assert gpu_topology([_gpu("Turing"), _gpu(None, is_nvidia=False)]) == "hybrid"
+    assert gpu_topology([_gpu("Turing")]) == "nvidia-only"
+    assert gpu_topology([_gpu(None, is_nvidia=False)]) == "other"
+    assert gpu_topology([]) == "other"
+
+
+def test_gpu_env_lines_hybrid_keeps_igpu_primary():
+    from shedos_installer.utils.hardware import gpu_env_lines
+
+    igpu = _gpu(None, is_nvidia=False, pci_addr="0000:00:02.0")
+    dgpu = _gpu("Turing", pci_addr="0000:01:00.0")
+    joined = "\n".join(gpu_env_lines([igpu, dgpu]))
+    # iGPU node first in AQ_DRM_DEVICES; no global nvidia block; prime-run noted.
+    assert ("AQ_DRM_DEVICES=/dev/dri/by-path/pci-0000:00:02.0-card:"
+            "/dev/dri/by-path/pci-0000:01:00.0-card") in joined
+    assert "GBM_BACKEND" not in joined
+    assert "LIBVA_DRIVER_NAME" not in joined
+    assert "prime-run" in joined
+
+
+def test_gpu_env_lines_nvidia_only_sets_render_env():
+    from shedos_installer.utils.hardware import gpu_env_lines
+
+    joined = "\n".join(gpu_env_lines([_gpu("Ampere", pci_addr="0000:01:00.0")]))
+    assert "AQ_DRM_DEVICES=/dev/dri/by-path/pci-0000:01:00.0-card" in joined
+    assert "GBM_BACKEND=nvidia-drm" in joined
+    assert "__GLX_VENDOR_LIBRARY_NAME=nvidia" in joined
+
+
+def test_gpu_env_lines_single_other_gpu_is_empty():
+    from shedos_installer.utils.hardware import gpu_env_lines
+
+    assert gpu_env_lines([_gpu(None, is_nvidia=False)]) == []
