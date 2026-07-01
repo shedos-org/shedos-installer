@@ -142,14 +142,16 @@ def get_gpus() -> list[GpuInfo]:
     if not result.success:
         return gpus
 
-    # Parse VGA compatible controllers
-    vga_pattern = re.compile(
-        r"([0-9a-f:\.]+)\s+VGA compatible controller.*?:\s+(.*?)\s+\[([0-9a-f:]+)\]",
+    # GPUs enumerate under three PCI classes: VGA compatible controller [0300],
+    # 3D controller [0302] (muxless Optimus dGPUs), and Display controller [0380].
+    gpu_pattern = re.compile(
+        r"([0-9a-f:\.]+)\s+(?:VGA compatible controller|3D controller|"
+        r"Display controller).*?:\s+(.*?)\s+\[([0-9a-f:]+)\]",
         re.IGNORECASE
     )
 
     for line in result.stdout.splitlines():
-        match = vga_pattern.search(line)
+        match = gpu_pattern.search(line)
         if match:
             description = match.group(2)
             vendor_device = match.group(3)

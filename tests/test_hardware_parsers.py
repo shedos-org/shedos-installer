@@ -127,7 +127,8 @@ def test_get_gpus_handles_multi_gpu_system(monkeypatch: pytest.MonkeyPatch) -> N
     sample = (
         "00:02.0 VGA compatible controller [0300]: "
         "Intel Corporation Raptor Lake-P [Iris Xe Graphics] [8086:a7a0]\n"
-        "01:00.0 VGA compatible controller [0300]: "
+        # Muxless Optimus dGPUs enumerate as "3D controller [0302]", not VGA.
+        "01:00.0 3D controller [0302]: "
         "NVIDIA Corporation TU117M [GeForce GTX 1650 Mobile] [10de:1f99]\n"
     )
     monkeypatch.setattr(
@@ -137,3 +138,39 @@ def test_get_gpus_handles_multi_gpu_system(monkeypatch: pytest.MonkeyPatch) -> N
     gpus = get_gpus()
     assert len(gpus) == 2
     assert {g.vendor for g in gpus} == {"Intel", "NVIDIA"}
+
+
+def test_get_gpus_detects_3d_controller_nvidia(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Muxless Optimus: the dGPU is a "3D controller [0302]", never VGA.
+    sample = ("01:00.0 3D controller [0302]: NVIDIA Corporation TU117M "
+              "[GeForce GTX 1650 Mobile] [10de:1f99]\n")
+    monkeypatch.setattr("shedos_installer.utils.hardware.run_command",
+                        lambda *a, **kw: make_result(stdout=sample))
+    gpus = get_gpus()
+    assert len(gpus) == 1
+    assert gpus[0].is_nvidia
+    assert gpus[0].vendor == "NVIDIA"
+
+
+def test_get_gpus_detects_display_controller(monkeypatch: pytest.MonkeyPatch) -> None:
+    sample = ("07:00.0 Display controller [0380]: NVIDIA Corporation GA107 "
+              "[10de:25a2]\n")
+    monkeypatch.setattr("shedos_installer.utils.hardware.run_command",
+                        lambda *a, **kw: make_result(stdout=sample))
+    gpus = get_gpus()
+    assert len(gpus) == 1
+    assert gpus[0].is_nvidia
+
+
+def test_get_gpus_ignores_non_gpu_controllers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only real GPU classes count; other "... controller" lines are not GPUs.
+    sample = (
+        "00:1f.3 Ethernet controller [0200]: Intel [8086:1234]\n"
+        "00:14.0 USB controller [0c03]: Intel [8086:5678]\n"
+        "01:00.0 3D controller [0302]: NVIDIA Corporation TU117M "
+        "[GeForce GTX 1650 Mobile] [10de:1f99]\n"
+    )
+    monkeypatch.setattr("shedos_installer.utils.hardware.run_command",
+                        lambda *a, **kw: make_result(stdout=sample))
+    gpus = get_gpus()
+    assert [g.vendor for g in gpus] == ["NVIDIA"]
