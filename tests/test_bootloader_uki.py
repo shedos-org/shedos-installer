@@ -180,3 +180,26 @@ def test_register_nvram_skips_recovery_when_image_absent(tmp_path, monkeypatch):
     inst = _inst(tmp_path, uefi=True)
     created = _nvram_capture(inst, monkeypatch)
     assert [label for label, _ in created] == ["ShedOS"]
+
+
+def test_configure_mkinitcpio_never_bakes_nvidia_into_modules(
+    tmp_path, mock_run_command, monkeypatch
+):
+    """nvidia loads post-boot from the always-current on-disk .ko, so it must not
+    be forced into the initramfs even on an nvidia box — only btrfs is. Baking it
+    in is what strands a signed UKI with a stale nvidia.ko after an nvidia-only
+    upgrade."""
+    (tmp_path / "boot").mkdir()
+    (tmp_path / "boot" / "vmlinuz-linux-zen").write_bytes(b"k")
+    for img in ("initramfs-linux-zen.img", "initramfs-linux-zen-fallback.img"):
+        (tmp_path / "boot" / img).write_bytes(b"i")
+    (tmp_path / "etc").mkdir(exist_ok=True)
+    (tmp_path / "etc" / "mkinitcpio.conf").write_text(
+        "MODULES=(archiso nvidia nvidia_drm)\nFILES=()\nHOOKS=(base udev)\n"
+    )
+    inst = _inst(tmp_path, nvidia=True, uefi=False)
+    monkeypatch.setattr(inst, "_copy_kernels_to_esp", lambda: True)
+    assert inst.configure_mkinitcpio() is True
+    conf = (tmp_path / "etc" / "mkinitcpio.conf").read_text()
+    modules_line = next(l for l in conf.splitlines() if l.startswith("MODULES="))
+    assert modules_line == "MODULES=(btrfs)"

@@ -586,8 +586,9 @@ class LimineInstaller:
         # NVIDIA GSP and friends) into the initramfs, overflowing the FAT
         # ESP Limine boots from. Without it the splash renders on the
         # builtin simpledrm framebuffer and the GPU driver loads from the
-        # root fs after mount. Proprietary-NVIDIA early KMS still works —
-        # it rides the MODULES line below, not this hook.
+        # root fs after mount. NVIDIA isn't in the MODULES line below either —
+        # it autoloads post-boot from the on-disk .ko (modeset via the cmdline),
+        # so an nvidia upgrade can't strand a stale module in the signed UKI.
         hooks = ["base", "systemd", "autodetect", "modconf",
                  "keyboard", "sd-vconsole", "block", "plymouth"]
 
@@ -603,8 +604,6 @@ class LimineInstaller:
         hooks.append("filesystems")
 
         modules = "MODULES=(btrfs)"
-        if self.nvidia:
-            modules = "MODULES=(btrfs nvidia nvidia_modeset nvidia_uvm nvidia_drm)"
 
         # Plymouth needs these fonts inside the initramfs to render text.
         files = [

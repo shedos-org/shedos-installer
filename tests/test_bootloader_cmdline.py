@@ -40,3 +40,10 @@ def test_encrypted_root_unencrypted_swap_falls_back_to_fstab_uuid(tmp_path):
     assert "rd.luks.name=ROOTLUKS=luks-ROOTLUKS" in cmd
     assert "resume=UUID=PLAINSWAP" in cmd
     assert "/dev/mapper/swap" not in cmd
+
+
+def test_nvidia_modeset_stays_on_cmdline(tmp_path):
+    # nvidia is no longer in MODULES=, so the cmdline is now the only thing
+    # turning on nvidia_drm modeset — it applies whenever the module loads.
+    assert "nvidia_drm.modeset=1" in _inst(tmp_path, nvidia=True)._build_cmdline()
+    assert "nvidia_drm.modeset=1" not in _inst(tmp_path, nvidia=False)._build_cmdline()
