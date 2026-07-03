@@ -463,6 +463,28 @@ def test_finalize_returns_none_when_username_missing(
     fake_libcalamares.utils.warning.assert_called()
 
 
+def test_finalize_vconsole_keymap_falls_back_to_us(fake_libcalamares, tmp_path):
+    """A KEYMAP with no console keymap on the target (ng) becomes us; a
+    loadable one is left alone."""
+    mod = _load_module(
+        "shedos_finalize_main_vconsole",
+        MODULES_SRC / "shedos_finalize/main.py",
+    )
+    keymaps = tmp_path / "usr/share/kbd/keymaps/i386/qwerty"
+    keymaps.mkdir(parents=True)
+    (keymaps / "uk.map.gz").write_bytes(b"")
+    vconsole = tmp_path / "etc/vconsole.conf"
+    vconsole.parent.mkdir(parents=True)
+
+    vconsole.write_text("KEYMAP=ng\nFONT=lat9w-16\n")
+    mod._fix_vconsole_keymap(tmp_path)
+    assert vconsole.read_text() == "KEYMAP=us\nFONT=lat9w-16\n"
+
+    vconsole.write_text("KEYMAP=uk\n")
+    mod._fix_vconsole_keymap(tmp_path)
+    assert vconsole.read_text() == "KEYMAP=uk\n"
+
+
 def test_enable_one_service_first_strategy_succeeds(
     fake_libcalamares, monkeypatch, tmp_path,
 ):
