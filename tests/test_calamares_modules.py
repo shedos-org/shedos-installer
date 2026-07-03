@@ -176,7 +176,8 @@ def test_gitconfig_returns_none_when_username_missing(fake_libcalamares):
 
 def test_recovery_stash_writes_key_for_the_tour(fake_libcalamares, tmp_path):
     """The install-time key lands at the target stash, wheel-readable (0660) in a
-    0755 dir, so the first-login tour can read + shred it."""
+    wheel-writable (0770) dir, so the first-login tour can read it, shred it, and
+    unlink it."""
     target = tmp_path / "target"
     target.mkdir()
     fake_libcalamares.globalstorage.value.side_effect = lambda k: {
@@ -193,10 +194,13 @@ def test_recovery_stash_writes_key_for_the_tour(fake_libcalamares, tmp_path):
     stash = target / "var/lib/shedos/encrypt/recovery-key"
     assert stash.read_text() == "PRNDW-EWGMR-AAAAA\n"
     assert (stash.stat().st_mode & 0o777) == 0o660
-    assert (stash.parent.stat().st_mode & 0o777) == 0o755
-    # chgrp runs in the target chroot (mocked here), so the group is not asserted —
-    # only that the stash sets it.
-    fake_libcalamares.utils.target_env_call.assert_called_once()
+    assert (stash.parent.stat().st_mode & 0o777) == 0o770
+    # chgrp (dir + stash) runs in the target chroot (mocked here), so the group is
+    # not asserted — only that the module sets it on both.
+    fake_libcalamares.utils.target_env_call.assert_called_once_with(
+        ["chgrp", "wheel", "/var/lib/shedos/encrypt",
+         "/var/lib/shedos/encrypt/recovery-key"]
+    )
 
 
 def test_recovery_stash_noop_without_key(fake_libcalamares, tmp_path):
@@ -337,7 +341,7 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
 
     captured = []
 
-    def fake_run_chroot(cmd, **kw):
+    def fake_run_chroot(cmd, **_kw):
         captured.append(cmd)
         from shedos_installer.utils.command import CommandResult
         return CommandResult(
@@ -379,7 +383,7 @@ def test_nvidia_enables_suspend_services_when_supported(
 
     enabled = []
 
-    def fake_run_chroot(cmd, **kw):
+    def fake_run_chroot(cmd, **_kw):
         from shedos_installer.utils.command import CommandResult
         if cmd[:2] == ["systemctl", "enable"]:
             enabled.append(cmd[2])
@@ -414,7 +418,7 @@ def test_nvidia_writes_hybrid_gpu_env(fake_libcalamares, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "get_gpus", lambda: [igpu, dgpu])
     monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "missing")
 
-    def fake_run_chroot(cmd, **kw):
+    def fake_run_chroot(cmd, **_kw):
         from shedos_installer.utils.command import CommandResult
         return CommandResult(returncode=0, stdout="", stderr="", success=True)
 
@@ -568,7 +572,7 @@ def test_configs_seeds_sync_manifest_from_pkg_defaults(
     # test doesn't shell out. We don't care about their effect here.
     import subprocess as _sp
 
-    def fake_subprocess_run(*args, **kw):
+    def fake_subprocess_run(*args, **_kw):
         return _sp.CompletedProcess(
             args=args[0] if args else [],
             returncode=0, stdout="", stderr="",

@@ -34,16 +34,20 @@ def run():
     try:
         stash_dir = os.path.join(root, "var/lib/shedos/encrypt")
         os.makedirs(stash_dir, exist_ok=True)
-        os.chmod(stash_dir, 0o755)
+        # Wheel-writable dir: the tour (a wheel desktop user) must be able to
+        # UNLINK the stash after showing it, and unlink needs write on the
+        # parent dir, not the file. A wheel user already has disk access via
+        # sudo, so this leaks nothing new.
+        os.chmod(stash_dir, 0o770)
         stash = os.path.join(stash_dir, "recovery-key")
         with open(stash, "w") as f:
             f.write(recovery + "\n")
-        # Wheel-readable so the wheel desktop user's tour can read it then shred it; a
-        # wheel user already has disk access via sudo, so this leaks nothing new. chgrp
-        # in the target so its wheel GID is used, not the host live ISO's.
+        # Wheel-readable so the tour can read it then shred it. chgrp in the
+        # target so its wheel GID is used, not the host live ISO's.
         os.chmod(stash, 0o660)
         libcalamares.utils.target_env_call(
-            ["chgrp", "wheel", "/var/lib/shedos/encrypt/recovery-key"]
+            ["chgrp", "wheel", "/var/lib/shedos/encrypt",
+             "/var/lib/shedos/encrypt/recovery-key"]
         )
     except OSError as e:
         libcalamares.utils.warning(
