@@ -485,6 +485,31 @@ def test_finalize_vconsole_keymap_falls_back_to_us(fake_libcalamares, tmp_path):
     assert vconsole.read_text() == "KEYMAP=uk\n"
 
 
+def test_finalize_dedupes_the_tmpfs_tmp_fstab_line(fake_libcalamares, tmp_path):
+    """The SSD tmpfs /tmp line goes when @tmp is mounted there; an fstab
+    without the subvol keeps its tmpfs line."""
+    mod = _load_module(
+        "shedos_finalize_main_fstab",
+        MODULES_SRC / "shedos_finalize/main.py",
+    )
+    fstab = tmp_path / "etc/fstab"
+    fstab.parent.mkdir(parents=True)
+
+    fstab.write_text(
+        "UUID=abc /     btrfs subvol=/@,compress=zstd 0 0\n"
+        "UUID=abc /tmp  btrfs subvol=/@tmp,compress=zstd 0 0\n"
+        "tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0\n"
+    )
+    mod._dedupe_tmp_fstab(tmp_path)
+    text = fstab.read_text()
+    assert "subvol=/@tmp" in text
+    assert "tmpfs /tmp tmpfs" not in text
+
+    fstab.write_text("tmpfs /tmp tmpfs defaults 0 0\n")
+    mod._dedupe_tmp_fstab(tmp_path)
+    assert fstab.read_text() == "tmpfs /tmp tmpfs defaults 0 0\n"
+
+
 def test_enable_one_service_first_strategy_succeeds(
     fake_libcalamares, monkeypatch, tmp_path,
 ):

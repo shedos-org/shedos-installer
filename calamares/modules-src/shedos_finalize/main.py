@@ -694,6 +694,55 @@ def _fix_vconsole_keymap(root_mount):
         )
 
 
+def _dedupe_tmp_fstab(root_mount):
+    """Drop the tmpfs /tmp fstab line when /tmp is a btrfs subvolume.
+
+    Calamares' fstab module adds a `tmpfs /tmp` entry on SSD systems, but the
+    ShedOS layout already mounts the @tmp subvolume there — systemd's
+    fstab-generator then errors on the duplicate on every boot, and the tmpfs
+    line is dead weight (the subvolume wins).
+    """
+    fstab = root_mount / "etc" / "fstab"
+    if not fstab.exists():
+        return
+    try:
+        original = fstab.read_text()
+    except OSError as exc:
+        libcalamares.utils.warning(f"shedos_finalize: cannot read {fstab}: {exc}")
+        return
+
+    lines = original.splitlines()
+
+    def _fields(line):
+        stripped = line.strip()
+        return [] if not stripped or stripped.startswith("#") else stripped.split()
+
+    has_subvol_tmp = any(
+        len(f) >= 4 and f[1] == "/tmp" and "subvol" in f[3]
+        for f in map(_fields, lines)
+    )
+    if not has_subvol_tmp:
+        return
+
+    kept = [
+        line for line in lines
+        if not (
+            (f := _fields(line))
+            and len(f) >= 3
+            and f[0] == "tmpfs" and f[1] == "/tmp" and f[2] == "tmpfs"
+        )
+    ]
+    if len(kept) == len(lines):
+        return
+    try:
+        fstab.write_text("\n".join(kept) + "\n")
+        libcalamares.utils.debug(
+            f"shedos_finalize: dropped the duplicate tmpfs /tmp line from {fstab}"
+        )
+    except OSError as exc:
+        libcalamares.utils.warning(f"shedos_finalize: cannot write {fstab}: {exc}")
+
+
 def _verify_locale_generated(root_mount_point, root_mount):
     """Confirm the user's LANG was actually compiled into locale-archive.
 
@@ -820,6 +869,7 @@ def run():
 
     _fix_locale_conf_encoding(root_mount)
     _fix_vconsole_keymap(root_mount)
+    _dedupe_tmp_fstab(root_mount)
     _verify_locale_generated(root_mount_point, root_mount)
 
     r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/zsh", username]))
