@@ -11,6 +11,7 @@ medium may be gone entirely). Symlink whichever exists to
 /run/shedos/airootfs.sfs — the path unpackfs.conf points at."""
 
 import os
+import subprocess
 import libcalamares
 
 _CANDIDATES = (
@@ -25,7 +26,22 @@ def pretty_name():
     return "Locating the installation image..."
 
 
+def _isolate_target_mounts():
+    """Make the target subtree a mount slave. While it is shared,
+    every arch-chroot call's API mounts propagate against the live
+    session's /dev/shm and stack layers of which only the topmost is
+    reachable by path — Calamares' umount module then fails on the
+    buried ones with 'device shm could not be unmounted'. This runs
+    here because sourcemedia is the earliest always-run exec step
+    after the mount module, before anything chroots."""
+    root = libcalamares.globalstorage.value("rootMountPoint")
+    if root and os.path.ismount(root):
+        subprocess.run(["mount", "--make-rslave", root],
+                       capture_output=True, check=False)
+
+
 def run():
+    _isolate_target_mounts()
     for candidate in _CANDIDATES:
         if os.path.isfile(candidate):
             os.makedirs(os.path.dirname(_LINK), exist_ok=True)

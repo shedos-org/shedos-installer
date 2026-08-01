@@ -62,12 +62,56 @@ def _chroot(root_mount_point, cmd):
     return ["arch-chroot", root_mount_point, *cmd]
 
 
+def _stale_chroot_layers(real_root, mountinfo):
+    """Mounts arch-chroot left under the target, deepest path first.
+    Its shm/devpts/udev layers stack across chroot calls (the k-th shm
+    sits inside the k-th devtmpfs), so a single path-based unmount only
+    ever pops the topmost — the rest must come from mountinfo."""
+    layers = []
+    for line in mountinfo.splitlines():
+        parts = line.split()
+        try:
+            sep = parts.index("-")
+        except ValueError:
+            continue
+        if len(parts) < 5 or len(parts) < sep + 3:
+            continue
+        mnt = parts[4]
+        src = parts[sep + 2]
+        if mnt.startswith(real_root + "/") and src in ("shm", "devpts", "udev"):
+            layers.append(mnt)
+    layers.sort(key=len, reverse=True)
+    return layers
+
+
+def _drain_chroot_mount_layers(root_mount_point):
+    try:
+        real_root = os.path.realpath(root_mount_point)
+    except OSError:
+        return
+    for _ in range(64):
+        try:
+            with open("/proc/self/mountinfo") as f:
+                mountinfo = f.read()
+        except OSError:
+            return
+        layers = _stale_chroot_layers(real_root, mountinfo)
+        if not layers:
+            return
+        progressed = False
+        for mnt in layers:
+            res = subprocess.run(["umount", "-l", mnt],
+                                 capture_output=True, check=False)
+            progressed = progressed or res.returncode == 0
+        if not progressed:
+            return
+
+
 def _kill_chroot_stragglers(root_mount_point):
-    """Free the target's /dev/shm so Calamares' umount module never
-    raises 'device shm could not be unmounted'. Three independent
-    layers: SIGKILL processes whose chroot root matches the target,
-    fuser -k anything still holding an fd on the bind, lazy-unmount
-    /dev/shm as a final fallback.
+    """Free the target of everything arch-chroot left behind so
+    Calamares' umount module meets a clean tree: SIGKILL processes
+    whose chroot root matches the target, then drain the stacked
+    shm/devpts/udev mount layers from mountinfo.
     """
     killed = []
     try:
@@ -98,17 +142,9 @@ def _kill_chroot_stragglers(root_mount_point):
             except (OSError, ProcessLookupError):
                 pass
 
-    shm_path = os.path.join(root_mount_point, "dev", "shm")
-    if os.path.ismount(shm_path):
-        subprocess.run(
-            ["fuser", "-k", "-KILL", "-m", shm_path],
-            capture_output=True, check=False,
-        )
-    if os.path.ismount(shm_path):
-        subprocess.run(
-            ["umount", "-l", shm_path],
-            capture_output=True, check=False,
-        )
+    # No fuser -km here: while the target is shared it matches by
+    # filesystem, and that set includes live-session processes.
+    _drain_chroot_mount_layers(root_mount_point)
     return killed
 
 

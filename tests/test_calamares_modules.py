@@ -432,7 +432,58 @@ def test_nvidia_writes_hybrid_gpu_env(fake_libcalamares, monkeypatch, tmp_path):
     assert "prime-run" in env
 
 
+# ─── shedos_sourcemedia ─────────────────────────────────────────────
+
+
+def test_sourcemedia_makes_the_target_a_mount_slave(
+    fake_libcalamares, monkeypatch, tmp_path,
+):
+    """The target subtree must stop receiving mount propagation before
+    anything chroots, or arch-chroot's shm layers stack unreachably."""
+    fake_libcalamares.globalstorage.value.side_effect = lambda k: {
+        "rootMountPoint": str(tmp_path),
+    }.get(k)
+    mod = _load_module(
+        "shedos_sourcemedia_main_rslave",
+        MODULES_SRC / "shedos_sourcemedia/main.py",
+    )
+    calls = []
+    monkeypatch.setattr(mod.os.path, "ismount", lambda p: p == str(tmp_path))
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: calls.append(cmd) or MagicMock(returncode=0),
+    )
+    mod._isolate_target_mounts()
+    assert calls == [["mount", "--make-rslave", str(tmp_path)]]
+
+
 # ─── shedos_finalize ────────────────────────────────────────────────
+
+
+def test_finalize_drains_stacked_chroot_layers_deepest_first(
+    fake_libcalamares,
+):
+    """Only the topmost stacked layer is reachable by path; the drain
+    must find the buried ones in mountinfo and pop deepest-first."""
+    mod = _load_module(
+        "shedos_finalize_main_layers",
+        MODULES_SRC / "shedos_finalize/main.py",
+    )
+    root = "/tmp/calamares-root-abc"
+    mountinfo = "\n".join([
+        # unrelated mounts that must be ignored
+        f"20 1 0:5 / / rw - btrfs /dev/mapper/root rw",
+        f"30 20 0:6 / /dev/shm rw - tmpfs shm rw",
+        # calamares' own target mounts (wrong source names -> ignored)
+        f"40 20 0:7 / {root} rw - btrfs /dev/mapper/root rw",
+        f"41 40 0:8 / {root}/dev rw - devtmpfs dev rw",
+        # arch-chroot leftovers, one buried inside the other
+        f"50 41 0:9 / {root}/dev rw - devtmpfs udev rw",
+        f"51 50 0:10 / {root}/dev/shm rw - tmpfs shm rw",
+        f"52 50 0:11 / {root}/dev/pts rw - devpts devpts rw",
+    ])
+    layers = mod._stale_chroot_layers(root, mountinfo)
+    assert layers == [f"{root}/dev/shm", f"{root}/dev/pts", f"{root}/dev"]
 
 
 def test_finalize_returns_error_when_rootmount_missing(fake_libcalamares):
