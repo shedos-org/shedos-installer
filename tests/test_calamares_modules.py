@@ -324,19 +324,19 @@ def test_nvidia_skipped_when_no_supported_gpu(fake_libcalamares, monkeypatch):
     fake_libcalamares.utils.debug.assert_called()
 
 
-def test_nvidia_uses_fallback_list_when_package_file_missing(
+def test_nvidia_install_leg_uses_the_driver_stack(
     fake_libcalamares, monkeypatch, tmp_path,
 ):
-    """nvidia.txt missing → use the hardcoded fallback list and warn."""
+    """The install heal and the removal leg share one package list, so
+    the two can never drift apart. Firmware rides along on install."""
     fake_libcalamares.globalstorage.value.side_effect = lambda k: {
         "rootMountPoint": str(tmp_path),
     }.get(k)
 
     mod = _load_module(
-        "shedos_nvidia_main_fallback",
+        "shedos_nvidia_main_stack",
         MODULES_SRC / "shedos_nvidia/main.py",
     )
-    monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "definitely-missing")
     monkeypatch.setattr(mod, "get_gpus", lambda: [_nv_gpu()])
 
     captured = []
@@ -351,18 +351,10 @@ def test_nvidia_uses_fallback_list_when_package_file_missing(
     monkeypatch.setattr(mod, "run_chroot", fake_run_chroot)
 
     assert mod.run() is None
-    # Should warn about the missing nvidia.txt
-    warned = any(
-        "missing" in (c.args[0] if c.args else "")
-        for c in fake_libcalamares.utils.warning.call_args_list
-    )
-    assert warned
-    # First chroot call is the pacman install with the fallback set.
     pacman_cmd = next(
         c for c in captured if c[:3] == ["pacman", "-S", "--noconfirm"]
     )
-    assert "nvidia-open-dkms" in pacman_cmd
-    assert "nvidia-utils" in pacman_cmd
+    assert pacman_cmd[4:] == mod.DRIVER_STACK + ["linux-firmware-nvidia"]
 
 
 def test_nvidia_enables_suspend_services_when_supported(
@@ -378,7 +370,6 @@ def test_nvidia_enables_suspend_services_when_supported(
         "shedos_nvidia_main_services",
         MODULES_SRC / "shedos_nvidia/main.py",
     )
-    monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "definitely-missing")
     monkeypatch.setattr(mod, "get_gpus", lambda: [_nv_gpu()])
 
     enabled = []
@@ -416,7 +407,6 @@ def test_nvidia_writes_hybrid_gpu_env(fake_libcalamares, monkeypatch, tmp_path):
                    driver="nvidia", is_nvidia=True, nvidia_series="Turing",
                    pci_addr="0000:01:00.0")
     monkeypatch.setattr(mod, "get_gpus", lambda: [igpu, dgpu])
-    monkeypatch.setattr(mod, "PACKAGE_DIR", tmp_path / "missing")
 
     def fake_run_chroot(cmd, **_kw):
         from shedos_installer.utils.command import CommandResult
@@ -811,3 +801,78 @@ def test_luks_escrow_noop_when_encryption_opted_out(fake_libcalamares, monkeypat
                         lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     assert mod.run() is None
     assert called["n"] == 0
+
+
+# ─── shedos_nvidia ──────────────────────────────────────────────────
+
+
+def _nvidia_module(name: str):
+    return _load_module(name, MODULES_SRC / "shedos_nvidia/main.py")
+
+
+class _ChrootRecorder:
+    """run_chroot stand-in: answers -Qq from a fixed installed set and
+    records every command."""
+
+    def __init__(self, installed):
+        self.installed = installed
+        self.commands = []
+
+    def __call__(self, cmd, mount_point=None, timeout=None):
+        self.commands.append(cmd)
+        ok = True
+        if cmd[:2] == ["pacman", "-Qq"]:
+            ok = cmd[2] in self.installed
+        return types.SimpleNamespace(success=ok, stderr="")
+
+
+def test_nvidia_remove_composes_one_rns_for_installed_packages(
+    fake_libcalamares, monkeypatch,
+):
+    mod = _nvidia_module("shedos_nvidia_rns")
+    rec = _ChrootRecorder(installed={"nvidia-utils", "linux-firmware-nvidia"})
+    monkeypatch.setattr(mod, "run_chroot", rec)
+    mod._remove_nvidia_stack("/t", keep_firmware=False)
+    rns = [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
+    assert rns == [
+        ["pacman", "-Rns", "--noconfirm", "nvidia-utils", "linux-firmware-nvidia"]
+    ]
+
+
+def test_nvidia_remove_keeps_firmware_for_legacy_cards(
+    fake_libcalamares, monkeypatch,
+):
+    mod = _nvidia_module("shedos_nvidia_legacy")
+    rec = _ChrootRecorder(installed={"nvidia-utils", "linux-firmware-nvidia"})
+    monkeypatch.setattr(mod, "run_chroot", rec)
+    mod._remove_nvidia_stack("/t", keep_firmware=True)
+    (rns,) = [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
+    assert "linux-firmware-nvidia" not in rns
+    assert "nvidia-utils" in rns
+
+
+def test_nvidia_remove_noops_when_nothing_installed(
+    fake_libcalamares, monkeypatch,
+):
+    mod = _nvidia_module("shedos_nvidia_noop")
+    rec = _ChrootRecorder(installed=set())
+    monkeypatch.setattr(mod, "run_chroot", rec)
+    mod._remove_nvidia_stack("/t", keep_firmware=False)
+    assert not [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
+
+
+def test_nvidia_removal_set_stays_clear_of_shared_graphics(fake_libcalamares):
+    """Everything named must be nvidia-only: removing a package the rest
+    of the graphics stack uses would break non-nvidia installs."""
+    mod = _nvidia_module("shedos_nvidia_shared")
+    for shared in ("mesa", "libglvnd", "wayland", "vulkan-icd-loader"):
+        assert shared not in mod.DRIVER_STACK
+
+
+def test_nvidia_removal_set_names_the_whole_subtree(fake_libcalamares):
+    """pacstrap installs everything as explicit, so -Rns cascades
+    nothing — each nvidia-only library must be named or it stays behind
+    on every install."""
+    mod = _nvidia_module("shedos_nvidia_subtree")
+    for member in ("libxnvctrl", "egl-wayland", "egl-wayland2", "egl-gbm", "egl-x11", "eglexternalplatform"):
+        assert member in mod.DRIVER_STACK
