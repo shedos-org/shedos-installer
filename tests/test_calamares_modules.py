@@ -876,3 +876,14 @@ def test_nvidia_removal_set_names_the_whole_subtree(fake_libcalamares):
     mod = _nvidia_module("shedos_nvidia_subtree")
     for member in ("libxnvctrl", "egl-wayland", "egl-wayland2", "egl-gbm", "egl-x11", "eglexternalplatform"):
         assert member in mod.DRIVER_STACK
+
+
+# ─── shedos_configs ─────────────────────────────────────────────────
+
+
+def test_configs_source_carries_no_omz_seeding(fake_libcalamares):
+    """The dotfiles reach users via /etc/skel; the old wholesale
+    oh-my-zsh copy into every new home must stay gone."""
+    src = (MODULES_SRC / "shedos_configs/main.py").read_text()
+    for marker in ("oh-my-zsh", "oh_my_zsh", "powerlevel10k", "CONFIG_DIR"):
+        assert marker not in src, f"resurrected: {marker}"

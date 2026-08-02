@@ -908,17 +908,12 @@ def run():
     _dedupe_tmp_fstab(root_mount)
     _verify_locale_generated(root_mount_point, root_mount)
 
-    r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/zsh", username]))
+    r = _run(_chroot(root_mount_point, ["chsh", "-s", "/usr/bin/bash", username]))
     if r.returncode != 0:
-        _log_cmd_failure(f"chsh -s zsh {username}", r)
-
-    shells_file = root_mount / "etc" / "shells"
-    try:
-        if shells_file.exists() and "/usr/bin/zsh" not in shells_file.read_text():
-            with open(shells_file, "a") as f:
-                f.write("/usr/bin/zsh\n")
-    except Exception as e:
-        libcalamares.utils.warning(f"shedos_finalize: /etc/shells update: {e}")
+        libcalamares.utils.warning(
+            f"shedos_finalize: chsh -s bash {username} failed rc={r.returncode}; "
+            "the account keeps the shell useradd gave it"
+        )
 
     r = _run(_chroot(root_mount_point, ["usermod", "-aG", "docker", username]))
     if r.returncode != 0:

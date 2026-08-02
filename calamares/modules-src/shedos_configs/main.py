@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Deploy pre-configured dotfiles to the new user's home. Most dotfiles
-now reach the user via /etc/skel; this module handles the residual
-legacy /opt/shedos-installer/configs path, the oh-my-zsh seed, and
-the shedos-sync-configs manifest. WiFi-profile persistence lives in
+"""Post-skel touches to the new user's home: the default wallpaper,
+ownership, and the shedos-sync-configs manifest. Dotfiles themselves
+reach the user via /etc/skel. WiFi-profile persistence lives in
 shedos_finalize, not here."""
 
 import os
@@ -15,32 +14,7 @@ from pathlib import Path
 import libcalamares
 
 
-CONFIG_DIR = Path("/opt/shedos-installer/configs")
 BRANDING_DIR = Path("/opt/shedos-installer/branding")
-
-# (source_dirname, destination_relative_to_home)
-ALL_CONFIGS = [
-    ("hyprland", ".config/hypr"),
-    ("hypridle", ".config/hypr"),
-
-    ("waybar", ".config/waybar"),
-    ("walker", ".config/walker"),
-    ("kitty", ".config/kitty"),
-    ("mako", ".config/mako"),
-    ("rofi", ".config/rofi"),
-    ("fastfetch", ".config/fastfetch"),
-
-    ("starship", ".config"),
-    ("tmux", ""),
-
-    ("nvim", ".config/nvim"),
-    ("git", ".config/git"),
-    ("mise", ".config/mise"),
-    ("vscode", ".config/Code/User"),
-]
-
-# zsh files go directly to ~/, not under .config/.
-ZSH_FILES = [".zshrc", ".zprofile", ".p10k.zsh"]
 
 
 def pretty_name():
@@ -96,85 +70,7 @@ def run():
         except Exception as e:
             return (f"Could not create user home: {e}", "")
 
-    # CONFIG_DIR is the legacy staging area under /opt/shedos-installer/configs,
-    # populated by the Makefile from archiso/airootfs/etc/skel/. Since the
-    # Phase-1 packaging rework, dotfiles reach the new user's home via
-    # /etc/skel/ (shipped by the shedos-hyprland/shedos-nvim packages) and
-    # useradd -m. The legacy copy is redundant but kept as a safety net if the
-    # dir happens to exist. A missing CONFIG_DIR is NOT an error — we must
-    # still run the manifest-seed step below.
-    deployed_count = 0
     errors = []
-    have_legacy_configs = CONFIG_DIR.exists()
-    if have_legacy_configs:
-        libcalamares.utils.debug(f"shedos_configs: Legacy config dir: {CONFIG_DIR}")
-    else:
-        libcalamares.utils.debug(
-            f"shedos_configs: Legacy config dir not found ({CONFIG_DIR}); "
-            "skipping legacy deployment (dotfiles come from /etc/skel)"
-        )
-
-    for src_name, dest_rel in ALL_CONFIGS if have_legacy_configs else []:
-        src_path = CONFIG_DIR / src_name
-
-        if not src_path.exists():
-            libcalamares.utils.debug(f"shedos_configs: Skipping (not found): {src_name}")
-            continue
-
-        if dest_rel:
-            dest_path = user_home / dest_rel
-        else:
-            dest_path = user_home
-
-        libcalamares.utils.debug(f"shedos_configs: Deploying {src_name} -> {dest_path}")
-
-        try:
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if src_path.is_dir():
-                dest_path.mkdir(parents=True, exist_ok=True)
-                for item in src_path.iterdir():
-                    item_dest = dest_path / item.name
-                    if item.is_dir():
-                        _deploy_dir(item, item_dest)
-                    else:
-                        shutil.copy2(item, item_dest)
-                libcalamares.utils.debug(f"shedos_configs: Copied dir contents: {src_name}")
-            else:
-                shutil.copy2(src_path, dest_path)
-                libcalamares.utils.debug(f"shedos_configs: Copied file: {src_name}")
-
-            deployed_count += 1
-
-        except Exception as e:
-            error_msg = f"Failed to deploy {src_name}: {e}"
-            libcalamares.utils.warning(f"shedos_configs: {error_msg}")
-            errors.append(error_msg)
-            continue
-
-    zsh_dir = CONFIG_DIR / "zsh"
-    if zsh_dir.exists():
-        for filename in ZSH_FILES:
-            src_file = zsh_dir / filename
-            if src_file.exists():
-                try:
-                    dest_file = user_home / filename
-                    shutil.copy2(src_file, dest_file)
-                    libcalamares.utils.debug(f"shedos_configs: Copied {filename} to home")
-                    deployed_count += 1
-                except Exception as e:
-                    libcalamares.utils.warning(f"shedos_configs: Failed to copy {filename}: {e}")
-        for item in zsh_dir.iterdir():
-            if item.name not in ZSH_FILES:
-                try:
-                    dest_file = user_home / item.name
-                    if item.is_file():
-                        shutil.copy2(item, dest_file)
-                    else:
-                        _deploy_dir(item, dest_file)
-                    libcalamares.utils.debug(f"shedos_configs: Copied zsh/{item.name}")
-                except Exception as e:
-                    libcalamares.utils.warning(f"shedos_configs: Failed to copy zsh/{item.name}: {e}")
 
     wallpaper_src = BRANDING_DIR / "wallpapers" / "shedos-default.png"
     if wallpaper_src.exists():
@@ -188,44 +84,6 @@ def run():
             libcalamares.utils.warning(f"shedos_configs: Could not deploy wallpaper: {e}")
     else:
         libcalamares.utils.debug(f"shedos_configs: Wallpaper not found: {wallpaper_src}")
-
-    # Seed Oh My Zsh into the installed user's home.
-    #
-    # /etc/skel ships .zshrc which sources $ZSH/oh-my-zsh.sh where
-    # $ZSH=$HOME/.oh-my-zsh. The oh-my-zsh-git package installs the framework
-    # to /usr/share/oh-my-zsh — useradd -m does NOT copy anything from there.
-    # Without this seed the user's first shell spawn errors with
-    # "no such file or directory: $HOME/.oh-my-zsh/oh-my-zsh.sh".
-    # Parallels the live-ISO copy in archiso/airootfs/root/customize_airootfs.sh.
-    omz_src = root_mount / "usr/share/oh-my-zsh"
-    omz_dest = user_home / ".oh-my-zsh"
-    if omz_src.is_dir():
-        try:
-            _deploy_dir(omz_src, omz_dest)
-
-            # Symlink powerlevel10k into OMZ's custom-themes dir so .zshrc's
-            # ZSH_THEME="powerlevel10k/powerlevel10k" resolves.
-            p10k_src = Path("/usr/share/zsh-theme-powerlevel10k")
-            p10k_link = omz_dest / "custom/themes/powerlevel10k"
-            p10k_link.parent.mkdir(parents=True, exist_ok=True)
-            if p10k_link.exists() or p10k_link.is_symlink():
-                p10k_link.unlink()
-            # Store the target as an absolute in-target path — symlinks
-            # resolve relative to the booted system, not the live ISO.
-            p10k_link.symlink_to(p10k_src)
-
-            libcalamares.utils.debug(
-                f"shedos_configs: Seeded oh-my-zsh + p10k for {username}"
-            )
-        except Exception as e:
-            libcalamares.utils.warning(
-                f"shedos_configs: Could not seed oh-my-zsh: {e}"
-            )
-    else:
-        libcalamares.utils.warning(
-            f"shedos_configs: {omz_src} missing — oh-my-zsh-git not installed? "
-            f"User's .zshrc will fail on first shell spawn."
-        )
 
     libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
     try:
@@ -336,8 +194,6 @@ def run():
             libcalamares.utils.debug("shedos_configs: Pacman DB initialized successfully")
     except Exception as e:
         libcalamares.utils.warning(f"shedos_configs: Failed to init pacman db: {e}")
-
-    libcalamares.utils.debug(f"shedos_configs: Deployed {deployed_count} configurations")
 
     if errors:
         libcalamares.utils.warning(f"shedos_configs: Completed with {len(errors)} errors")
