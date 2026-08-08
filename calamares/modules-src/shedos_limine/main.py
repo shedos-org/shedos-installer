@@ -19,6 +19,7 @@ sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.core.bootloader import LimineInstaller
 from shedos_installer.utils.hardware import get_gpus, should_install_nvidia, is_uefi
+from shedos_installer.utils.vconsole import sanitize_keymap
 
 
 def pretty_name():
@@ -157,6 +158,17 @@ def run():
                 limine.last_error or "Failed to install Limine bootloader")
 
     libcalamares.utils.debug("Limine bootloader installed")
+
+    # Must precede mkinitcpio: sd-vconsole bakes vconsole.conf into the
+    # initramfs, so a console-less keymap fails Virtual Console Setup on
+    # every boot even after the on-disk file is corrected.
+    try:
+        if sanitize_keymap(root_mount_point):
+            libcalamares.utils.debug(
+                "replaced a console-less KEYMAP with us in vconsole.conf"
+            )
+    except OSError as exc:
+        libcalamares.utils.warning(f"cannot sanitize vconsole.conf: {exc}")
 
     if not limine.configure_mkinitcpio():
         return ("mkinitcpio configuration failed", "Failed to configure mkinitcpio")

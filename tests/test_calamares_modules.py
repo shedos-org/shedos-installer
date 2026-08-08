@@ -504,13 +504,11 @@ def test_finalize_returns_none_when_username_missing(
     fake_libcalamares.utils.warning.assert_called()
 
 
-def test_finalize_vconsole_keymap_falls_back_to_us(fake_libcalamares, tmp_path):
+def test_vconsole_keymap_falls_back_to_us(tmp_path):
     """A KEYMAP with no console keymap on the target (ng) becomes us; a
     loadable one is left alone."""
-    mod = _load_module(
-        "shedos_finalize_main_vconsole",
-        MODULES_SRC / "shedos_finalize/main.py",
-    )
+    from shedos_installer.utils.vconsole import sanitize_keymap
+
     keymaps = tmp_path / "usr/share/kbd/keymaps/i386/qwerty"
     keymaps.mkdir(parents=True)
     (keymaps / "uk.map.gz").write_bytes(b"")
@@ -518,12 +516,21 @@ def test_finalize_vconsole_keymap_falls_back_to_us(fake_libcalamares, tmp_path):
     vconsole.parent.mkdir(parents=True)
 
     vconsole.write_text("KEYMAP=ng\nFONT=lat9w-16\n")
-    mod._fix_vconsole_keymap(tmp_path)
+    assert sanitize_keymap(tmp_path) is True
     assert vconsole.read_text() == "KEYMAP=us\nFONT=lat9w-16\n"
 
     vconsole.write_text("KEYMAP=uk\n")
-    mod._fix_vconsole_keymap(tmp_path)
+    assert sanitize_keymap(tmp_path) is False
     assert vconsole.read_text() == "KEYMAP=uk\n"
+
+
+def test_limine_sanitizes_the_keymap_before_building_the_initramfs():
+    """sd-vconsole bakes vconsole.conf into the initramfs, so the fix is
+    worthless unless it lands before mkinitcpio runs."""
+    source = (MODULES_SRC / "shedos_limine/main.py").read_text()
+    assert source.index("sanitize_keymap(root_mount_point)") < source.index(
+        "limine.configure_mkinitcpio()"
+    )
 
 
 def test_finalize_dedupes_the_tmpfs_tmp_fstab_line(fake_libcalamares, tmp_path):

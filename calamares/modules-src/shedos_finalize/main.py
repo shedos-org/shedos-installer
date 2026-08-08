@@ -680,56 +680,6 @@ def _fix_locale_conf_encoding(root_mount):
         )
 
 
-def _fix_vconsole_keymap(root_mount):
-    """Fall back to `us` when vconsole.conf names a keymap loadkeys can't load.
-
-    Calamares' keyboard module writes the chosen layout to /etc/vconsole.conf,
-    but some X11 layouts (`ng`, `in`, …) have no console keymap under
-    /usr/share/kbd/keymaps — loadkeys then fails and Virtual Console Setup
-    shows failed on every boot. Such layouts are US-ASCII at the console
-    anyway (their extra glyphs live on AltGr), so `us` is the faithful
-    fallback. A keymap that exists is left strictly alone.
-    """
-    vconsole = root_mount / "etc" / "vconsole.conf"
-    if not vconsole.exists():
-        return
-    try:
-        original = vconsole.read_text()
-    except OSError as exc:
-        libcalamares.utils.warning(
-            f"shedos_finalize: cannot read {vconsole}: {exc}"
-        )
-        return
-
-    keymaps_root = root_mount / "usr" / "share" / "kbd" / "keymaps"
-    fixed_lines = []
-    changed = False
-    for line in original.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("KEYMAP="):
-            keymap = stripped.partition("=")[2].strip().strip('"').strip("'")
-            has_map = keymap and any(
-                keymaps_root.rglob(f"{keymap}.map*")
-            ) if keymaps_root.is_dir() else False
-            if keymap and keymap != "us" and not has_map:
-                fixed_lines.append("KEYMAP=us")
-                changed = True
-                continue
-        fixed_lines.append(line)
-
-    if not changed:
-        return
-    try:
-        vconsole.write_text("\n".join(fixed_lines) + "\n")
-        libcalamares.utils.debug(
-            f"shedos_finalize: replaced a console-less KEYMAP with us in {vconsole}"
-        )
-    except OSError as exc:
-        libcalamares.utils.warning(
-            f"shedos_finalize: cannot write {vconsole}: {exc}"
-        )
-
-
 def _dedupe_tmp_fstab(root_mount):
     """Drop the tmpfs /tmp fstab line when /tmp is a btrfs subvolume.
 
@@ -904,7 +854,6 @@ def run():
     _secure_accounts(root_mount_point, username)
 
     _fix_locale_conf_encoding(root_mount)
-    _fix_vconsole_keymap(root_mount)
     _dedupe_tmp_fstab(root_mount)
     _verify_locale_generated(root_mount_point, root_mount)
 
