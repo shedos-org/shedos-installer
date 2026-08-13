@@ -1,0 +1,21 @@
+# makepkg byproducts
+src/
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+
+# what the pipeline collects a build into
+dist/
+
+# python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Dev-only convenience: symlinked from /usr/share/calamares/qml so
+# `calamares -c calamares/` works without copying the QML tree in here.
+# Calamares 3.4.x refuses to start when -c points at a config dir with no
+# qml/, even when the sequence uses zero QML modules.
+calamares/qml
