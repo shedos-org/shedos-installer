@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+# The build pushes the pkgrel bump back here when a release is already
+# published, and a reusable workflow cannot grant itself the write.
+permissions:
+  contents: write
+jobs:
+  pipeline:
+    uses: shed-os/shedos-ci/.github/workflows/package-pipeline.yml@main
+    with:
+      packages: '["."]'
+      # python-pytest runs the installer suite, which is the whole of this
+      # package's behaviour. The other two are here so test/shared-data can
+      # ask the packages that own them for the two files this code reads
+      # from outside itself — the NVIDIA driver stack and the wallpaper.
+      test_packages: >-
+        python-pytest shedos-system shedos-branding
+    secrets:
+      SHEDOS_DISPATCH_TOKEN: ${{ secrets.SHEDOS_DISPATCH_TOKEN }}
