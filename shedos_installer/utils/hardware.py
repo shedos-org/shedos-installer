@@ -333,23 +333,6 @@ def get_cpu_info() -> dict[str, str]:
     return info
 
 
-def get_memory_info() -> dict[str, int]:
-    """Get memory information in bytes."""
-    info = {"total": 0, "available": 0, "swap_total": 0}
-
-    try:
-        import psutil
-        mem = psutil.virtual_memory()
-        swap = psutil.swap_memory()
-        info["total"] = mem.total
-        info["available"] = mem.available
-        info["swap_total"] = swap.total
-    except Exception as e:
-        logger.error(f"Failed to get memory info: {e}")
-
-    return info
-
-
 def _format_size(size_bytes: int) -> str:
     """Format bytes to human readable string."""
     size = float(size_bytes)
