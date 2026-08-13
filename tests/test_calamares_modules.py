@@ -19,8 +19,8 @@ from unittest.mock import MagicMock
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MODULES_SRC = REPO_ROOT / "installer/calamares/modules-src"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MODULES_SRC = REPO_ROOT / "calamares/modules-src"
 
 
 @pytest.fixture
@@ -264,7 +264,7 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
     """Install-time cmdline must carry the four UX-critical tokens so
     a fresh install has no framebuffer console flash on first boot —
     they cannot wait for the user's first `shedman apply`."""
-    sys.path.insert(0, str(REPO_ROOT / "installer"))
+    sys.path.insert(0, str(REPO_ROOT))
     try:
         from shedos_installer.core.bootloader import LimineInstaller
     finally:
