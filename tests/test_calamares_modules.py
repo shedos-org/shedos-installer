@@ -303,6 +303,17 @@ def test_limine_install_cmdline_includes_ux_baseline_tokens():
 # ─── shedos_nvidia ──────────────────────────────────────────────────
 
 
+@pytest.fixture
+def driver_stack(tmp_path, monkeypatch):
+    """shedos-system's list stood in for. What the shipped file actually
+    names is test/shared-data's question, asked of the installed package."""
+    stack = ["nvidia-open-dkms", "nvidia-utils", "libxnvctrl", "egl-gbm"]
+    path = tmp_path / "nvidia-driver-stack"
+    path.write_text("# the stack ShedOS ships\n" + "\n".join(stack) + "\n")
+    monkeypatch.setenv("SHEDOS_NVIDIA_STACK_FILE", str(path))
+    return stack
+
+
 def _nv_gpu():
     from shedos_installer.utils.hardware import GpuInfo
     return GpuInfo(
@@ -311,7 +322,9 @@ def _nv_gpu():
     )
 
 
-def test_nvidia_skipped_when_no_supported_gpu(fake_libcalamares, monkeypatch):
+def test_nvidia_skipped_when_no_supported_gpu(
+    fake_libcalamares, monkeypatch, driver_stack,
+):
     """No NVIDIA GPU the open modules can drive → run() exits early with None.
     The gate is the GPU itself now, not a globalstorage key set by another
     module that runs later."""
@@ -325,7 +338,7 @@ def test_nvidia_skipped_when_no_supported_gpu(fake_libcalamares, monkeypatch):
 
 
 def test_nvidia_install_leg_uses_the_driver_stack(
-    fake_libcalamares, monkeypatch, tmp_path,
+    fake_libcalamares, monkeypatch, tmp_path, driver_stack,
 ):
     """The install heal and the removal leg share one package list, so
     the two can never drift apart. Firmware rides along on install."""
@@ -354,11 +367,11 @@ def test_nvidia_install_leg_uses_the_driver_stack(
     pacman_cmd = next(
         c for c in captured if c[:3] == ["pacman", "-S", "--noconfirm"]
     )
-    assert pacman_cmd[4:] == mod.DRIVER_STACK + ["linux-firmware-nvidia"]
+    assert pacman_cmd[4:] == driver_stack + ["linux-firmware-nvidia"]
 
 
 def test_nvidia_enables_suspend_services_when_supported(
-    fake_libcalamares, monkeypatch, tmp_path,
+    fake_libcalamares, monkeypatch, tmp_path, driver_stack,
 ):
     """A supported NVIDIA GPU → the suspend/hibernate/resume services get
     enabled. They were dead before because the install gate never fired."""
@@ -389,7 +402,9 @@ def test_nvidia_enables_suspend_services_when_supported(
     ]
 
 
-def test_nvidia_writes_hybrid_gpu_env(fake_libcalamares, monkeypatch, tmp_path):
+def test_nvidia_writes_hybrid_gpu_env(
+    fake_libcalamares, monkeypatch, tmp_path, driver_stack,
+):
     """A hybrid Optimus box gets /etc/uwsm/env with an Intel-primary
     AQ_DRM_DEVICES and no global nvidia block (which would break iGPU VAAPI)."""
     from shedos_installer.utils.hardware import GpuInfo
@@ -839,7 +854,7 @@ def test_nvidia_remove_composes_one_rns_for_installed_packages(
     mod = _nvidia_module("shedos_nvidia_rns")
     rec = _ChrootRecorder(installed={"nvidia-utils", "linux-firmware-nvidia"})
     monkeypatch.setattr(mod, "run_chroot", rec)
-    mod._remove_nvidia_stack("/t", keep_firmware=False)
+    mod._remove_nvidia_stack("/t", keep_firmware=False, stack=["nvidia-utils"])
     rns = [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
     assert rns == [
         ["pacman", "-Rns", "--noconfirm", "nvidia-utils", "linux-firmware-nvidia"]
@@ -852,7 +867,7 @@ def test_nvidia_remove_keeps_firmware_for_legacy_cards(
     mod = _nvidia_module("shedos_nvidia_legacy")
     rec = _ChrootRecorder(installed={"nvidia-utils", "linux-firmware-nvidia"})
     monkeypatch.setattr(mod, "run_chroot", rec)
-    mod._remove_nvidia_stack("/t", keep_firmware=True)
+    mod._remove_nvidia_stack("/t", keep_firmware=True, stack=["nvidia-utils"])
     (rns,) = [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
     assert "linux-firmware-nvidia" not in rns
     assert "nvidia-utils" in rns
@@ -864,25 +879,21 @@ def test_nvidia_remove_noops_when_nothing_installed(
     mod = _nvidia_module("shedos_nvidia_noop")
     rec = _ChrootRecorder(installed=set())
     monkeypatch.setattr(mod, "run_chroot", rec)
-    mod._remove_nvidia_stack("/t", keep_firmware=False)
+    mod._remove_nvidia_stack("/t", keep_firmware=False, stack=["nvidia-utils"])
     assert not [c for c in rec.commands if c[:2] == ["pacman", "-Rns"]]
 
 
-def test_nvidia_removal_set_stays_clear_of_shared_graphics(fake_libcalamares):
-    """Everything named must be nvidia-only: removing a package the rest
-    of the graphics stack uses would break non-nvidia installs."""
-    mod = _nvidia_module("shedos_nvidia_shared")
-    for shared in ("mesa", "libglvnd", "wayland", "vulkan-icd-loader"):
-        assert shared not in mod.DRIVER_STACK
-
-
-def test_nvidia_removal_set_names_the_whole_subtree(fake_libcalamares):
-    """pacstrap installs everything as explicit, so -Rns cascades
-    nothing — each nvidia-only library must be named or it stays behind
-    on every install."""
-    mod = _nvidia_module("shedos_nvidia_subtree")
-    for member in ("libxnvctrl", "egl-wayland", "egl-wayland2", "egl-gbm", "egl-x11", "eglexternalplatform"):
-        assert member in mod.DRIVER_STACK
+def test_nvidia_stops_when_the_driver_stack_is_unreadable(
+    fake_libcalamares, monkeypatch, tmp_path,
+):
+    """No list means no way to know what to install or strip. The job fails
+    the install with the reason rather than proceeding with nothing."""
+    monkeypatch.setenv("SHEDOS_NVIDIA_STACK_FILE", str(tmp_path / "absent"))
+    mod = _nvidia_module("shedos_nvidia_no_stack")
+    monkeypatch.setattr(mod, "get_gpus", lambda: [_nv_gpu()])
+    result = mod.run()
+    assert result is not None
+    assert "driver stack" in result[0]
 
 
 # ─── shedos_configs ─────────────────────────────────────────────────

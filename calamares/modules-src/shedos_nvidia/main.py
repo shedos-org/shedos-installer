@@ -13,6 +13,7 @@ import libcalamares
 INSTALLER_ROOT = Path("/usr/lib/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
+from shedos_installer.driver_stack import driver_stack
 from shedos_installer.utils.command import run_chroot
 from shedos_installer.utils.hardware import (
     get_gpus,
@@ -26,29 +27,10 @@ def pretty_name():
     return "Configuring NVIDIA drivers"
 
 
-# Kept in sync with nvidia-reap in shedos-system. Named in full because
-# pacstrap installs everything as explicit, so -Rns never cascades.
-DRIVER_STACK = [
-    "nvidia-open-dkms",
-    "nvidia-utils",
-    "nvidia-settings",
-    "nvidia-prime",
-    "libva-nvidia-driver",
-    "nvidia-container-toolkit",
-    "libnvidia-container",
-    "libxnvctrl",
-    "egl-wayland",
-    "egl-wayland2",
-    "egl-gbm",
-    "egl-x11",
-    "eglexternalplatform",
-]
-
-
-def _remove_nvidia_stack(root_mount_point, keep_firmware):
+def _remove_nvidia_stack(root_mount_point, keep_firmware, stack):
     """The target is a clone of the live ISO, so the stack starts out
     present. keep_firmware: nouveau loads it on legacy nvidia cards."""
-    candidates = DRIVER_STACK + ([] if keep_firmware else ["linux-firmware-nvidia"])
+    candidates = stack + ([] if keep_firmware else ["linux-firmware-nvidia"])
     installed = [
         p for p in candidates
         if run_chroot(["pacman", "-Qq", p], mount_point=root_mount_point).success
@@ -96,6 +78,11 @@ def _note_legacy_gpu():
 
 
 def run():
+    try:
+        stack = driver_stack()
+    except OSError as exc:
+        return (f"Could not read the NVIDIA driver stack: {exc}", "")
+
     gpus = get_gpus()
     if not should_install_nvidia(gpus):
         libcalamares.utils.debug("No NVIDIA GPU the open modules can drive — skipping")
@@ -105,6 +92,7 @@ def run():
         _remove_nvidia_stack(
             root_mount_point,
             keep_firmware=any(g.is_nvidia for g in gpus),
+            stack=stack,
         )
         return None
 
@@ -115,7 +103,7 @@ def run():
     # The stack rides the live clone, so this is a heal for a partial
     # clone rather than a fresh install; --needed makes it a no-op when
     # everything is already in place.
-    nvidia_packages = DRIVER_STACK + ["linux-firmware-nvidia"]
+    nvidia_packages = stack + ["linux-firmware-nvidia"]
     libcalamares.utils.debug(f"Installing NVIDIA packages: {nvidia_packages}")
 
     result = run_chroot(
