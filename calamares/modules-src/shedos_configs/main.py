@@ -14,7 +14,9 @@ from pathlib import Path
 import libcalamares
 
 
-BRANDING_DIR = Path("/opt/shedos-installer/branding")
+# shedos-branding ships the wallpaper; the ISO build used to copy it in
+# beside the installer, which is why this used to name /opt.
+WALLPAPER = Path("/usr/share/shedos/wallpapers/shedos-default.png")
 
 
 def pretty_name():
@@ -72,7 +74,7 @@ def run():
 
     errors = []
 
-    wallpaper_src = BRANDING_DIR / "wallpapers" / "shedos-default.png"
+    wallpaper_src = WALLPAPER
     if wallpaper_src.exists():
         try:
             hypr_dir = user_home / ".config" / "hypr"

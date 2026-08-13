@@ -10,7 +10,7 @@ from pathlib import Path
 
 import libcalamares
 
-INSTALLER_ROOT = Path("/opt/shedos-installer")
+INSTALLER_ROOT = Path("/usr/lib/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.utils.command import run_chroot

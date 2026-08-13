@@ -13,8 +13,9 @@ from pathlib import Path
 
 import libcalamares
 
-# Installer package lives at /opt/shedos-installer/ in the live ISO.
-INSTALLER_ROOT = Path("/opt/shedos-installer")
+# Calamares loads this file from /usr/lib/calamares/modules, which puts
+# nothing of the installer on the import path.
+INSTALLER_ROOT = Path("/usr/lib/shedos-installer")
 sys.path.insert(0, str(INSTALLER_ROOT))
 
 from shedos_installer.core.bootloader import LimineInstaller
