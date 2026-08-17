@@ -6,7 +6,7 @@
 # keeps the copy the squashfs left behind.
 
 pkgname=shedos-installer
-pkgver=2026.08.09
+pkgver=2026.08.09.1
 pkgrel=1
 pkgdesc='ShedOS Calamares modules, their configuration and the library behind them'
 arch=('any')
