@@ -47,14 +47,16 @@ package() {
     done < <(find shedos_installer -name '*.py' | LC_ALL=C sort)
 
     # The job modules, where settings.conf's modules-search looks for them.
-    local _mod _name
-    for _mod in calamares/modules-src/*/; do
-        _name=$(basename "$_mod")
-        install -Dm644 "$_mod/main.py" \
-            "$pkgdir/usr/lib/calamares/modules/$_name/main.py"
-        install -Dm644 "$_mod/module.desc" \
-            "$pkgdir/usr/lib/calamares/modules/$_name/module.desc"
-    done
+    # Whole directories rather than main.py and module.desc by name, so a
+    # module that grows a third file ships it. __pycache__ stays out: python
+    # loads stale bytecode in preference to the fresh .py beside it, and the
+    # squashfs it would load from is read-only.
+    local _mod
+    while IFS= read -r _mod; do
+        install -Dm644 "$_mod" \
+            "$pkgdir/usr/lib/calamares/modules/${_mod#calamares/modules-src/}"
+    done < <(find calamares/modules-src -type f -not -path '*/__pycache__/*' \
+        | LC_ALL=C sort)
 
     # The sequence and the per-module configuration, at the path Calamares
     # reads without being told where to look.

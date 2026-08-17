@@ -74,18 +74,17 @@ def run():
 
     errors = []
 
-    wallpaper_src = WALLPAPER
-    if wallpaper_src.exists():
+    if WALLPAPER.exists():
         try:
             hypr_dir = user_home / ".config" / "hypr"
             hypr_dir.mkdir(parents=True, exist_ok=True)
             wallpaper_dest = hypr_dir / "wallpaper.png"
-            shutil.copy2(wallpaper_src, wallpaper_dest)
+            shutil.copy2(WALLPAPER, wallpaper_dest)
             libcalamares.utils.debug("shedos_configs: Wallpaper deployed")
         except Exception as e:
             libcalamares.utils.warning(f"shedos_configs: Could not deploy wallpaper: {e}")
     else:
-        libcalamares.utils.debug(f"shedos_configs: Wallpaper not found: {wallpaper_src}")
+        libcalamares.utils.debug(f"shedos_configs: Wallpaper not found: {WALLPAPER}")
 
     libcalamares.utils.debug(f"shedos_configs: Fixing ownership for {username}")
     try:
