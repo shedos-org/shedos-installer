@@ -62,6 +62,44 @@ else
         "the PKGBUILD collects the library from '${libsrc:-nothing}'"
 fi
 
+# P4: the branding descriptor is a file something else writes. It ships saying
+# DEVELOPMENT because the package is built without knowing which release it
+# rides, and the ISO build rewrites four version fields in it during pacstrap.
+# A package-owned file with a local edit in it is what backup= is for: without
+# the entry pacman replaces the stamped copy on the next upgrade and leaves no
+# .pacnew to notice it by. The placeholder is what says the file is written to,
+# so the two halves are asked together.
+desc=calamares/branding/shedos/branding.desc
+declare -a backups=()
+mapfile -t backups < <(
+    bash -c 'source "$1" > /dev/null 2>&1; printf "%s\n" "${backup[@]}"' \
+        _ "$repo_root/PKGBUILD"
+)
+if ! grep -q 'version: "DEVELOPMENT"' "$repo_root/$desc"; then
+    _fail P4_the_stamped_descriptor_is_backed_up \
+        "$desc no longer carries the placeholder the ISO stamps over"
+elif printf '%s\n' "${backups[@]}" | grep -qxF "etc/calamares/branding/shedos/branding.desc"; then
+    _ok P4_the_stamped_descriptor_is_backed_up
+else
+    _fail P4_the_stamped_descriptor_is_backed_up \
+        "backup= names ${backups[*]:-nothing} and not the descriptor"
+fi
+
+# P5: the other direction. A backup entry naming a path the package does not
+# install is an entry pacman never acts on, which reads exactly like one it
+# does. Everything this package puts under /etc comes out of calamares/ at the
+# same relative path, so that is the mapping back to a file this repo holds.
+stray=()
+for entry in "${backups[@]}"; do
+    [[ -n $entry ]] || continue
+    [[ -f $repo_root/${entry/#etc\//} ]] || stray+=("$entry")
+done
+if (( ${#stray[@]} == 0 )); then
+    _ok P5_every_backup_entry_is_installed
+else
+    _fail P5_every_backup_entry_is_installed "package() installs no ${stray[*]}"
+fi
+
 echo
 echo "install-paths: $pass/$((pass + fail)) passed"
 if (( fail > 0 )); then printf '  %s\n' "${failures[@]}" >&2; exit 1; fi

@@ -26,6 +26,15 @@ depends=(
                        # list shedos_nvidia installs and strips
 )
 
+# The descriptor ships saying DEVELOPMENT, because the package is built without
+# knowing which release it rides, and the ISO build rewrites its four version
+# fields during pacstrap. That makes the installed copy a local edit, and
+# without this pacman would replace it on the next upgrade and leave no .pacnew
+# to notice by. Nothing else under /etc/calamares is written to after install.
+backup=(
+    'etc/calamares/branding/shedos/branding.desc'
+)
+
 source=("git+https://github.com/shed-os/shedos-installer.git#tag=$pkgver")
 sha256sums=('SKIP')
 
