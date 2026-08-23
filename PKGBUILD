@@ -10,7 +10,7 @@ pkgver=2026.08.09.2
 pkgrel=1
 pkgdesc='ShedOS Calamares modules, their configuration and the library behind them'
 arch=('any')
-url='https://github.com/shed-os/shedos-installer'
+url='https://github.com/shedos-org/shedos-installer'
 license=('GPL-3.0-or-later')
 # The modules only ever run from the live ISO, and the tools they drive
 # (pacman, mkinitcpio, limine, sbctl, cryptsetup) come from its package list.
@@ -35,7 +35,7 @@ backup=(
     'etc/calamares/branding/shedos/branding.desc'
 )
 
-source=("git+https://github.com/shed-os/shedos-installer.git#tag=$pkgver")
+source=("git+https://github.com/shedos-org/shedos-installer.git#tag=$pkgver")
 sha256sums=('SKIP')
 
 # Where the library lands, and the path both modules that import it name. Not

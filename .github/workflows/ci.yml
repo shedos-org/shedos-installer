@@ -9,7 +9,7 @@ permissions:
   contents: write
 jobs:
   pipeline:
-    uses: shed-os/shedos-ci/.github/workflows/package-pipeline.yml@main
+    uses: shedos-org/shedos-ci/.github/workflows/package-pipeline.yml@main
     with:
       packages: '["."]'
       # python-pytest runs the installer suite, which is the whole of this
