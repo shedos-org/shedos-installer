@@ -7,7 +7,7 @@
 
 pkgname=shedos-installer
 pkgver=2026.08.09.2
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS Calamares modules, their configuration and the library behind them'
 arch=('any')
 url='https://github.com/shedos-org/shedos-installer'
